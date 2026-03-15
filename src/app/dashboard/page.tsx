@@ -1209,7 +1209,7 @@ export default function CineflowDashboard() {
             setProcessingSteps([...currentSteps]);
           });
           if (audioBlob) {
-            fileToSend = new File([audioBlob], "audio.webm", { type: "audio/webm" });
+            fileToSend = new File([audioBlob], "audio.wav", { type: "audio/wav" });
             console.log(
               `[dashboard] Audio extracted: ${(fileToSend.size / 1024).toFixed(0)}KB (original: ${(uploadedFile.file.size / 1024 / 1024).toFixed(1)}MB)`
             );

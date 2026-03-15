@@ -1,217 +1,131 @@
 /**
- * Extract audio from video file in the browser using Web Audio API + MediaRecorder.
- * Returns a small WebM/Opus blob suitable for Whisper API (<4MB).
- *
- * Strategy:
- * 1. Create an offscreen <video> element with accelerated playback (16x)
- * 2. Capture the media stream via captureStream()
- * 3. Record only the audio track with MediaRecorder (audio/webm;codecs=opus)
- * 4. Use low bitrate (32kbps mono) to keep output < 4MB even for 10+ min videos
- *
- * Fallback: if extraction fails, returns null so caller can send original file.
+ * Extract audio from video file using AudioContext decodeAudioData.
+ * Converts to 16kHz mono WAV — small enough for Whisper API and under Vercel 4.5MB limit.
+ * 
+ * 16kHz mono 16-bit WAV ≈ 1.9MB per minute.
+ * For videos > 2 min, downsample further or truncate.
  */
 
-const MAX_OUTPUT_SIZE = 4 * 1024 * 1024; // 4MB hard limit
+const MAX_OUTPUT_SIZE = 4 * 1024 * 1024; // 4MB
 
 export async function extractAudioFromVideo(
   videoFile: File,
   onProgress?: (pct: number) => void
 ): Promise<Blob | null> {
-  // Skip extraction if file is already small enough
+  // Skip if file already small
   if (videoFile.size <= MAX_OUTPUT_SIZE) {
-    return null; // caller will use original
+    return null;
   }
 
-  return new Promise<Blob | null>((resolve) => {
+  try {
+    onProgress?.(10);
+
+    // Read file as ArrayBuffer
+    const arrayBuffer = await videoFile.arrayBuffer();
+    onProgress?.(30);
+
+    // Decode audio using AudioContext
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
+      sampleRate: 16000, // Whisper optimal sample rate
+    });
+
+    let audioBuffer: AudioBuffer;
     try {
-      const video = document.createElement("video");
-      video.muted = false; // must NOT be muted — we need audio stream
-      video.playsInline = true;
-      video.preload = "auto";
-
-      const objectUrl = URL.createObjectURL(videoFile);
-      video.src = objectUrl;
-
-      const cleanup = () => {
-        video.pause();
-        video.src = "";
-        video.load();
-        URL.revokeObjectURL(objectUrl);
-      };
-
-      // Timeout safety: if extraction takes > 120s, bail out
-      const timeout = setTimeout(() => {
-        console.warn("[audio-extract] Timeout — aborting extraction");
-        cleanup();
-        resolve(null);
-      }, 120_000);
-
-      video.addEventListener("error", () => {
-        console.error("[audio-extract] Video element error:", video.error);
-        clearTimeout(timeout);
-        cleanup();
-        resolve(null);
-      });
-
-      video.addEventListener("loadedmetadata", () => {
-        const duration = video.duration;
-        if (!isFinite(duration) || duration <= 0) {
-          console.error("[audio-extract] Invalid video duration");
-          clearTimeout(timeout);
-          cleanup();
-          resolve(null);
-          return;
-        }
-
-        // captureStream() is required — check support
-        if (typeof (video as any).captureStream !== "function") {
-          console.warn("[audio-extract] captureStream not supported");
-          clearTimeout(timeout);
-          cleanup();
-          resolve(null);
-          return;
-        }
-
-        // Determine bitrate: aim for output < 4MB
-        // Budget: 4MB = 4 * 1024 * 1024 * 8 bits = 33,554,432 bits
-        // Available per second: budget / duration
-        const budgetBitsPerSec = Math.floor((MAX_OUTPUT_SIZE * 8) / duration);
-        // Clamp between 16kbps and 64kbps (opus handles low rates well)
-        const targetBitrate = Math.max(16_000, Math.min(64_000, budgetBitsPerSec));
-
-        try {
-          // Capture stream from video
-          const stream: MediaStream = (video as any).captureStream();
-          const audioTracks = stream.getAudioTracks();
-
-          if (audioTracks.length === 0) {
-            console.warn("[audio-extract] No audio tracks in video");
-            clearTimeout(timeout);
-            cleanup();
-            resolve(null);
-            return;
-          }
-
-          // Create audio-only stream
-          const audioStream = new MediaStream(audioTracks);
-
-          // Determine supported MIME type
-          const mimeTypes = [
-            "audio/webm;codecs=opus",
-            "audio/webm",
-            "audio/ogg;codecs=opus",
-          ];
-          let mimeType = "";
-          for (const mt of mimeTypes) {
-            if (MediaRecorder.isTypeSupported(mt)) {
-              mimeType = mt;
-              break;
-            }
-          }
-          if (!mimeType) {
-            console.warn("[audio-extract] No supported audio MIME type found");
-            clearTimeout(timeout);
-            cleanup();
-            resolve(null);
-            return;
-          }
-
-          const recorder = new MediaRecorder(audioStream, {
-            mimeType,
-            audioBitsPerSecond: targetBitrate,
-          });
-
-          const chunks: Blob[] = [];
-
-          recorder.ondataavailable = (e) => {
-            if (e.data.size > 0) {
-              chunks.push(e.data);
-            }
-          };
-
-          recorder.onstop = () => {
-            clearTimeout(timeout);
-            const blob = new Blob(chunks, { type: mimeType.split(";")[0] });
-            cleanup();
-
-            if (blob.size === 0) {
-              console.warn("[audio-extract] Recorded blob is empty");
-              resolve(null);
-              return;
-            }
-
-            if (blob.size > MAX_OUTPUT_SIZE) {
-              console.warn(
-                `[audio-extract] Output ${(blob.size / 1024 / 1024).toFixed(1)}MB exceeds limit`
-              );
-              // Still return it — better than sending the 15MB video
-            }
-
-            console.log(
-              `[audio-extract] Done: ${(blob.size / 1024).toFixed(0)}KB from ${(videoFile.size / 1024 / 1024).toFixed(1)}MB video (${duration.toFixed(0)}s)`
-            );
-            resolve(blob);
-          };
-
-          recorder.onerror = (e) => {
-            console.error("[audio-extract] MediaRecorder error:", e);
-            clearTimeout(timeout);
-            cleanup();
-            resolve(null);
-          };
-
-          // Progress tracking via timeupdate
-          video.addEventListener("timeupdate", () => {
-            if (onProgress && isFinite(duration) && duration > 0) {
-              const pct = Math.min(100, (video.currentTime / duration) * 100);
-              onProgress(pct);
-            }
-          });
-
-          // When video ends — stop recording
-          video.addEventListener("ended", () => {
-            if (recorder.state === "recording") {
-              recorder.stop();
-            }
-          });
-
-          // Start recording, then play video at maximum speed
-          recorder.start(1000); // collect chunks every second
-
-          // Set playback rate BEFORE play
-          // Most browsers support up to 16x, some only 4x
-          // Use highest supported rate for fastest extraction
-          video.playbackRate = 16;
-          video.play().then(() => {
-            // Verify playback rate was accepted
-            if (video.playbackRate < 16) {
-              // Browser capped it — try stepping down
-              video.playbackRate = Math.min(video.playbackRate, 8);
-            }
-          }).catch((playErr) => {
-            console.error("[audio-extract] Play failed:", playErr);
-            // Try with lower rate
-            video.playbackRate = 4;
-            video.play().catch(() => {
-              // Give up — user interaction required
-              clearTimeout(timeout);
-              if (recorder.state === "recording") {
-                recorder.stop();
-              }
-              cleanup();
-              resolve(null);
-            });
-          });
-        } catch (err) {
-          console.error("[audio-extract] Setup error:", err);
-          clearTimeout(timeout);
-          cleanup();
-          resolve(null);
-        }
-      });
-    } catch (err) {
-      console.error("[audio-extract] Fatal error:", err);
-      resolve(null);
+      audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    } catch (decodeErr) {
+      console.error("[audio-extract] decodeAudioData failed:", decodeErr);
+      audioCtx.close();
+      return null;
     }
-  });
+    onProgress?.(60);
+
+    // Get mono channel data (mix down if stereo)
+    let monoData: Float32Array;
+    if (audioBuffer.numberOfChannels === 1) {
+      monoData = audioBuffer.getChannelData(0);
+    } else {
+      // Mix channels to mono
+      const ch0 = audioBuffer.getChannelData(0);
+      const ch1 = audioBuffer.getChannelData(1);
+      monoData = new Float32Array(ch0.length);
+      for (let i = 0; i < ch0.length; i++) {
+        monoData[i] = (ch0[i] + ch1[i]) / 2;
+      }
+    }
+
+    // Check if WAV would be too big (16-bit = 2 bytes per sample)
+    const wavDataSize = monoData.length * 2;
+    const estimatedWavSize = wavDataSize + 44; // WAV header
+
+    // If too big, downsample further (8kHz)
+    let finalData = monoData;
+    let sampleRate = audioBuffer.sampleRate;
+
+    if (estimatedWavSize > MAX_OUTPUT_SIZE) {
+      // Downsample by factor of 2 (8kHz)
+      const factor = Math.ceil(estimatedWavSize / MAX_OUTPUT_SIZE);
+      const newLength = Math.floor(monoData.length / factor);
+      finalData = new Float32Array(newLength);
+      for (let i = 0; i < newLength; i++) {
+        finalData[i] = monoData[i * factor];
+      }
+      sampleRate = Math.floor(sampleRate / factor);
+    }
+
+    onProgress?.(80);
+
+    // Convert to 16-bit PCM WAV
+    const wavBlob = encodeWAV(finalData, sampleRate);
+
+    audioCtx.close();
+    onProgress?.(100);
+
+    console.log(
+      `[audio-extract] Done: ${(wavBlob.size / 1024).toFixed(0)}KB WAV from ${(videoFile.size / 1024 / 1024).toFixed(1)}MB video (${audioBuffer.duration.toFixed(0)}s @ ${sampleRate}Hz)`
+    );
+
+    return wavBlob;
+  } catch (err) {
+    console.error("[audio-extract] Fatal error:", err);
+    return null;
+  }
+}
+
+function encodeWAV(samples: Float32Array, sampleRate: number): Blob {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const dataLength = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  // WAV header
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true); // chunk size
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);
+  view.setUint16(32, numChannels * bytesPerSample, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(view, 36, "data");
+  view.setUint32(40, dataLength, true);
+
+  // PCM data
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
 }
