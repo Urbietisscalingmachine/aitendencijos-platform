@@ -5,8 +5,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { TranscriptSegment, WordTimestamp } from "@/types/cineflow";
 
-export const runtime = "nodejs";
-export const maxDuration = 120; // Whisper can be slow on long files
+export const runtime = "edge"; // Edge runtime has NO body size limit
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
