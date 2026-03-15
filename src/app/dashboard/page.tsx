@@ -23,6 +23,9 @@ import AudioEngine from "@/components/AudioEngine";
 import TimelineTrack, { TRACK_CONFIG } from "@/components/TimelineTrack";
 import ExportModalComponent from "@/components/ExportModal";
 
+// ── Utilities ───────────────────────────────────────────
+import { extractAudioFromVideo } from "@/lib/audio-extract";
+
 // ── Types ───────────────────────────────────────────────
 import type {
   TranscriptSegment,
@@ -1103,6 +1106,7 @@ export default function CineflowDashboard() {
   const buildProcessingSteps = useCallback(
     (mode: EditingMode, detail: AIDetailLevel): ProcessingStep[] => {
       const steps: ProcessingStep[] = [];
+      steps.push({ id: "audio-prepare", label: "🎧 Ruošiamas audio...", status: "pending" });
       steps.push({ id: "transcribe", label: "⏳ Transkribuojama...", status: "pending" });
 
       if (mode === "reference-clone") {
@@ -1192,9 +1196,37 @@ export default function CineflowDashboard() {
       let musicTrack: MusicTrack | null = null;
 
       try {
+        // ═══ 0. EXTRACT AUDIO (client-side, to stay under Vercel 4.5MB limit) ═══
+        let fileToSend: File | Blob = uploadedFile.file;
+        try {
+          const audioBlob = await extractAudioFromVideo(uploadedFile.file, (pct) => {
+            // Update step label with progress
+            currentSteps = currentSteps.map((s) =>
+              s.id === "audio-prepare" && s.status === "active"
+                ? { ...s, label: `🎧 Ruošiamas audio... ${Math.round(pct)}%` }
+                : s
+            );
+            setProcessingSteps([...currentSteps]);
+          });
+          if (audioBlob) {
+            fileToSend = new File([audioBlob], "audio.webm", { type: "audio/webm" });
+            console.log(
+              `[dashboard] Audio extracted: ${(fileToSend.size / 1024).toFixed(0)}KB (original: ${(uploadedFile.file.size / 1024 / 1024).toFixed(1)}MB)`
+            );
+          } else {
+            // null means file was already small or extraction failed — use original
+            console.log("[dashboard] Using original file (small or extraction skipped)");
+          }
+        } catch (err) {
+          console.warn("[dashboard] Audio extraction failed, using original file:", err);
+          // Fallback: send original file
+        }
+        advance("audio-prepare");
+        await new Promise((r) => setTimeout(r, 200));
+
         // ═══ 1. TRANSCRIBE ═══
         const fd = new FormData();
-        fd.append("file", uploadedFile.file);
+        fd.append("file", fileToSend);
         fd.append("language", "lt");
         try {
           const res = await fetch("/api/transcribe", { method: "POST", body: fd });
