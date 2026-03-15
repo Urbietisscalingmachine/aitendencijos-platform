@@ -24,7 +24,7 @@ import TimelineTrack, { TRACK_CONFIG } from "@/components/TimelineTrack";
 import ExportModalComponent from "@/components/ExportModal";
 
 // ── Utilities ───────────────────────────────────────────
-import { extractAudioFromVideo, transcribeClientSide } from "@/lib/audio-extract";
+// audio-extract removed — Vercel Pro supports 250MB uploads
 
 // ── Types ───────────────────────────────────────────────
 import type {
@@ -1106,7 +1106,6 @@ export default function CineflowDashboard() {
   const buildProcessingSteps = useCallback(
     (mode: EditingMode, detail: AIDetailLevel): ProcessingStep[] => {
       const steps: ProcessingStep[] = [];
-      steps.push({ id: "audio-prepare", label: "🎧 Ruošiamas audio...", status: "pending" });
       steps.push({ id: "transcribe", label: "⏳ Transkribuojama...", status: "pending" });
 
       if (mode === "reference-clone") {
@@ -1196,37 +1195,20 @@ export default function CineflowDashboard() {
       let musicTrack: MusicTrack | null = null;
 
       try {
-        // ═══ 0+1. TRANSCRIBE (always client-side — bypasses Vercel 4.5MB limit) ═══
-        advance("audio-prepare"); // skip audio prep step
-        await new Promise((r) => setTimeout(r, 100));
-        
+        // ═══ 1. TRANSCRIBE (server-side via Vercel Pro — supports large files) ═══
         try {
-          // Always call OpenAI Whisper directly from browser
-          // This bypasses Vercel's 4.5MB body size limit entirely
-          console.log("[dashboard] Using client-side Whisper API (direct to OpenAI)");
-          
-          // Get API key from server
-          const keyRes = await fetch("/api/transcribe", { method: "OPTIONS" });
-          const keyData = await keyRes.json().catch(() => null);
-          const apiKey = keyData?.key;
-          if (!apiKey) throw new Error("Nepavyko gauti API rakto");
-          
-          const result = await transcribeClientSide(
-            uploadedFile.file,
-            apiKey,
-            "lt",
-            (pct) => {
-              currentSteps = currentSteps.map((s) =>
-                s.id === "transcribe" && s.status === "active"
-                  ? { ...s, label: `⏳ Transkribuojama... ${Math.round(pct)}%` }
-                  : s
-              );
-              setProcessingSteps([...currentSteps]);
-            }
-          );
-          if (result && result.segments.length > 0) {
-            transcriptSegments = result.segments;
-            setTranscript(result.segments);
+          const fd = new FormData();
+          fd.append("file", uploadedFile.file);
+          fd.append("language", "lt");
+          const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({ error: "Unknown error" }));
+            throw new Error(errData.error || `HTTP ${res.status}`);
+          }
+          const data = await res.json();
+          if (data.segments && data.segments.length > 0) {
+            transcriptSegments = data.segments;
+            setTranscript(data.segments);
           } else {
             throw new Error("Whisper negrąžino segmentų");
           }
