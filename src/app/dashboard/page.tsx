@@ -35,6 +35,7 @@ import type {
   BrollClip,
   BrollSuggestion,
   EffectKeyframe,
+  EffectType,
   MusicTrack,
 } from "@/types/cineflow";
 
@@ -506,9 +507,11 @@ function BrollModelSelector({
 function ProcessingView({
   videoUrl,
   steps,
+  errors,
 }: {
   videoUrl: string;
   steps: ProcessingStep[];
+  errors?: string[];
 }) {
   return (
     <div
@@ -628,6 +631,28 @@ function ProcessingView({
             </span>
           </div>
         ))}
+
+        {/* Error summary */}
+        {errors && errors.length > 0 && (
+          <div
+            style={{
+              marginTop: 16,
+              padding: "12px 16px",
+              borderRadius: 12,
+              border: "1px solid rgba(239,68,68,0.3)",
+              background: "rgba(239,68,68,0.06)",
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#ef4444", marginBottom: 6 }}>
+              ⚠️ Klaidos:
+            </div>
+            {errors.map((err, i) => (
+              <div key={i} style={{ fontSize: 11, color: "rgba(239,68,68,0.8)", lineHeight: 1.6 }}>
+                • {err}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -674,6 +699,11 @@ export default function CineflowDashboard() {
   // ── Transcript ─────────────────────────────────────
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [brollSuggestions, setBrollSuggestions] = useState<BrollSuggestion[]>([]);
+  const [zoomMoments, setZoomMoments] = useState<{ timestamp: number; word: string; type: string }[]>([]);
+  const [suggestedMusic, setSuggestedMusic] = useState<{ genre: string; mood: string } | null>(null);
+  const [fetchedBrollClips, setFetchedBrollClips] = useState<{ suggestion: BrollSuggestion; clips: BrollClip[] }[]>([]);
+  const [fetchedMusicTrack, setFetchedMusicTrack] = useState<MusicTrack | null>(null);
+  const [processingErrors, setProcessingErrors] = useState<string[]>([]);
 
   // ── Audio ──────────────────────────────────────────
   const [audioSettings, setAudioSettings] = useState<AudioSettings>({
@@ -771,7 +801,7 @@ export default function CineflowDashboard() {
     return marks;
   }, [timeline.duration, pixelsPerSecond]);
 
-  // Active subtitle for real-time overlay
+  // Active subtitle for real-time overlay — find from transcript for smoother updates
   const activeSubtitle = useMemo(() => {
     return timeline.clips.find(
       (c) =>
@@ -780,6 +810,13 @@ export default function CineflowDashboard() {
         timeline.currentTime < c.startTime + c.duration
     );
   }, [timeline.clips, timeline.currentTime]);
+
+  // Sync timeline currentTime from video timeupdate for smoother subtitle tracking
+  const handleVideoTimeUpdate = useCallback(() => {
+    if (editorVideoRef.current && !timeline.playing) {
+      // Only sync if user seeked the video directly (not when timeline drives playback)
+    }
+  }, [timeline.playing]);
 
   // ═════════════════════════════════════════════════════
   // PLAYBACK TIMER
@@ -1113,107 +1150,316 @@ export default function CineflowDashboard() {
       if (!uploadedFile) return;
 
       setIsProcessing(true);
+      setProcessingErrors([]);
       const steps = buildProcessingSteps(mode, detail);
       // Activate first step
       steps[0].status = "active";
       setProcessingSteps([...steps]);
 
       let currentSteps = [...steps];
+      const errors: string[] = [];
 
       const advance = (stepId: string) => {
         currentSteps = advanceStep(currentSteps, stepId);
         setProcessingSteps([...currentSteps]);
       };
 
+      const markError = (stepId: string, errorMsg: string) => {
+        currentSteps = currentSteps.map((s) => {
+          if (s.id === stepId) return { ...s, status: "error" as const, label: `❌ ${errorMsg}` };
+          return s;
+        });
+        // Activate next pending step
+        let activated = false;
+        currentSteps = currentSteps.map((s) => {
+          if (!activated && s.status === "pending") {
+            activated = true;
+            return { ...s, status: "active" as const };
+          }
+          return s;
+        });
+        setProcessingSteps([...currentSteps]);
+        errors.push(errorMsg);
+        setProcessingErrors([...errors]);
+      };
+
+      // We'll collect data across steps
+      let transcriptSegments: TranscriptSegment[] = [];
+      let analysisBrollSuggestions: BrollSuggestion[] = [];
+      let analysisZoomMoments: { timestamp: number; word: string; type: string }[] = [];
+      let analysisSuggestedMusic: { genre: string; mood: string } | null = null;
+      let collectedBrollClips: { suggestion: BrollSuggestion; clips: BrollClip[] }[] = [];
+      let musicTrack: MusicTrack | null = null;
+
       try {
-        // 1. Transcribe
+        // ═══ 1. TRANSCRIBE ═══
         const fd = new FormData();
         fd.append("file", uploadedFile.file);
+        fd.append("language", "lt");
         try {
           const res = await fetch("/api/transcribe", { method: "POST", body: fd });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.segments) setTranscript(data.segments);
-            if (data.brollSuggestions) setBrollSuggestions(data.brollSuggestions);
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({ error: "Unknown error" }));
+            throw new Error(errData.error || `HTTP ${res.status}`);
           }
-        } catch {
-          console.error("Transcribe failed, using demo data");
+          const data = await res.json();
+          if (data.segments && data.segments.length > 0) {
+            transcriptSegments = data.segments;
+            setTranscript(data.segments);
+          } else {
+            throw new Error("Whisper negrąžino segmentų");
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          markError("transcribe", `Transkripcija nepavyko: ${msg}`);
+          console.error("Transcribe failed:", err);
         }
-        advance("transcribe");
-        await new Promise((r) => setTimeout(r, 500));
+        if (!currentSteps.find(s => s.id === "transcribe" && s.status === "error")) {
+          advance("transcribe");
+        }
+        await new Promise((r) => setTimeout(r, 300));
 
-        // 2. Reference analyze (if clone mode)
+        // ═══ 2. REFERENCE ANALYZE (if clone mode) ═══
         if (mode === "reference-clone") {
           try {
-            await fetch("/api/analyze", {
+            const res = await fetch("/api/analyze", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ referenceUrl: referenceVideoUrl, type: "style-clone" }),
+              body: JSON.stringify({
+                transcript: "Analyze reference video style",
+                language: "lt",
+              }),
             });
-          } catch {
-            console.error("Reference analysis failed");
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({ error: "Unknown" }));
+              throw new Error(errData.error || `HTTP ${res.status}`);
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            markError("ref-analyze", `Reference analizė nepavyko: ${msg}`);
+            console.error("Reference analysis failed:", err);
           }
-          advance("ref-analyze");
-          await new Promise((r) => setTimeout(r, 500));
+          if (!currentSteps.find(s => s.id === "ref-analyze" && s.status === "error")) {
+            advance("ref-analyze");
+          }
+          await new Promise((r) => setTimeout(r, 300));
         }
 
-        // 3. Analyze
-        try {
-          await fetch("/api/analyze", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode, detailLevel: detail }),
-          });
-        } catch {
-          console.error("Analyze failed");
+        // ═══ 3. ANALYZE ═══
+        if (transcriptSegments.length > 0) {
+          const fullTranscriptText = transcriptSegments.map((s) => s.text).join(" ");
+          try {
+            const res = await fetch("/api/analyze", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                transcript: fullTranscriptText,
+                language: "lt",
+              }),
+            });
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({ error: "Unknown" }));
+              throw new Error(errData.error || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            if (data.brollSuggestions && Array.isArray(data.brollSuggestions)) {
+              // Map API response to BrollSuggestion type with required fields
+              analysisBrollSuggestions = data.brollSuggestions.map((s: Record<string, unknown>, i: number) => ({
+                id: `broll-sug-${i}`,
+                timestamp: Number(s.timestamp) || 0,
+                duration: Number(s.duration) || 3,
+                keyword: String(s.keyword || ""),
+                cinematicPrompt: String(s.cinematicPrompt || ""),
+                pexelsQuery: String(s.pexelsQuery || ""),
+                type: "stock" as const,
+                shotType: "wide" as const,
+                mood: "calm" as const,
+              }));
+              setBrollSuggestions(analysisBrollSuggestions);
+            }
+            if (data.zoomMoments && Array.isArray(data.zoomMoments)) {
+              analysisZoomMoments = data.zoomMoments;
+              setZoomMoments(data.zoomMoments);
+            }
+            if (data.suggestedMusic) {
+              analysisSuggestedMusic = data.suggestedMusic;
+              setSuggestedMusic(data.suggestedMusic);
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            markError("analyze", `Analizė nepavyko: ${msg}`);
+            console.error("Analyze failed:", err);
+          }
+        } else {
+          markError("analyze", "Analizė praleista — nėra transkripcijos");
         }
-        advance("analyze");
-        await new Promise((r) => setTimeout(r, 500));
+        if (!currentSteps.find(s => s.id === "analyze" && s.status === "error")) {
+          advance("analyze");
+        }
+        await new Promise((r) => setTimeout(r, 300));
 
-        // 4. Generate subtitles (mark step)
-        advance("subtitles");
+        // ═══ 4. SUBTITLES (from transcript) ═══
+        if (transcriptSegments.length === 0) {
+          markError("subtitles", "Subtitrai praleisti — nėra transkripcijos");
+        }
+        if (!currentSteps.find(s => s.id === "subtitles" && s.status === "error")) {
+          advance("subtitles");
+        }
+        await new Promise((r) => setTimeout(r, 200));
+
+        // ═══ 5. B-ROLL (if applicable) ═══
+        if (mode !== "subtitles-only" && detail !== "quick") {
+          const suggestionsToProcess = analysisBrollSuggestions.length > 0 ? analysisBrollSuggestions : [];
+          
+          if (suggestionsToProcess.length === 0) {
+            markError("broll", "B-roll praleistas — nėra pasiūlymų iš analizės");
+          } else {
+            try {
+              if (detail === "premium") {
+                // Use AI-generated B-roll via /api/broll-generate
+                for (const suggestion of suggestionsToProcess) {
+                  try {
+                    const res = await fetch("/api/broll-generate", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        prompt: suggestion.cinematicPrompt || suggestion.keyword,
+                        model: brollModel,
+                        style: "cinematic",
+                        aspectRatio: "9:16",
+                        duration: Math.min(Math.max(suggestion.duration || 5, 5), 10),
+                      }),
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      if (data.clip) {
+                        collectedBrollClips.push({
+                          suggestion,
+                          clips: [{
+                            id: data.clip.id || `gen-${Date.now()}`,
+                            src: data.clip.src || data.videoUrl,
+                            thumbnail: data.clip.thumbnail || data.thumbnail || "",
+                            duration: data.clip.duration || suggestion.duration || 5,
+                            source: (data.clip.source || "kling") as "pexels" | "kling" | "upload",
+                            overlayMode: "fullscreen" as const,
+                          }],
+                        });
+                      }
+                    }
+                  } catch (genErr) {
+                    console.error(`B-roll generate failed for "${suggestion.keyword}":`, genErr);
+                  }
+                }
+              } else {
+                // Use Pexels stock search via /api/broll
+                for (const suggestion of suggestionsToProcess) {
+                  try {
+                    const query = suggestion.pexelsQuery || suggestion.keyword;
+                    const res = await fetch("/api/broll", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        query,
+                        perPage: 3,
+                      }),
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      if (data.clips && data.clips.length > 0) {
+                        collectedBrollClips.push({
+                          suggestion,
+                          clips: data.clips,
+                        });
+                      }
+                    }
+                  } catch (searchErr) {
+                    console.error(`B-roll search failed for "${suggestion.keyword}":`, searchErr);
+                  }
+                }
+              }
+              setFetchedBrollClips(collectedBrollClips);
+              if (collectedBrollClips.length === 0) {
+                markError("broll", "B-roll: nerasta tinkamų klipų");
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              markError("broll", `B-roll nepavyko: ${msg}`);
+              console.error("B-roll failed:", err);
+            }
+          }
+          if (!currentSteps.find(s => s.id === "broll" && s.status === "error")) {
+            advance("broll");
+          }
+          await new Promise((r) => setTimeout(r, 300));
+
+          // ═══ 6. MUSIC ═══
+          try {
+            const fullText = transcriptSegments.map((s) => s.text).join(" ");
+            let genre = analysisSuggestedMusic?.genre || "ambient";
+            let mood = analysisSuggestedMusic?.mood || "chill";
+
+            // a) Ask AI to suggest genre/mood from transcript
+            if (fullText.length > 10) {
+              try {
+                const suggestRes = await fetch("/api/music/suggest", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ transcript: fullText }),
+                });
+                if (suggestRes.ok) {
+                  const suggestData = await suggestRes.json();
+                  if (suggestData.genre) genre = suggestData.genre;
+                  if (suggestData.mood) mood = suggestData.mood;
+                  // suggest endpoint also returns tracks directly
+                  if (suggestData.tracks && suggestData.tracks.length > 0) {
+                    musicTrack = suggestData.tracks[0];
+                    setFetchedMusicTrack(suggestData.tracks[0]);
+                  }
+                }
+              } catch {
+                console.error("Music suggest failed, falling back to direct search");
+              }
+            }
+
+            // b) If no track from suggest, fetch via GET /api/music
+            if (!musicTrack) {
+              const musicRes = await fetch(`/api/music?genre=${encodeURIComponent(genre)}&mood=${encodeURIComponent(mood)}`);
+              if (musicRes.ok) {
+                const musicData = await musicRes.json();
+                if (musicData.tracks && musicData.tracks.length > 0) {
+                  musicTrack = musicData.tracks[0];
+                  setFetchedMusicTrack(musicData.tracks[0]);
+                }
+              }
+            }
+
+            if (!musicTrack) {
+              markError("music", "Muzika: nerasta tinkamų takelių");
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            markError("music", `Muzikos parinkimas nepavyko: ${msg}`);
+            console.error("Music selection failed:", err);
+          }
+          if (!currentSteps.find(s => s.id === "music" && s.status === "error")) {
+            advance("music");
+          }
+          await new Promise((r) => setTimeout(r, 300));
+        }
+
+        // ═══ 7. EFFECTS (premium) ═══
+        if (mode !== "subtitles-only" && detail === "premium") {
+          // Effects are built from zoomMoments in buildTimeline
+          advance("effects");
+          await new Promise((r) => setTimeout(r, 300));
+        }
+
+        // ═══ DONE ═══
+        advance("done");
         await new Promise((r) => setTimeout(r, 400));
 
-        // 5. B-roll (if applicable)
-        if (mode !== "subtitles-only" && detail !== "quick") {
-          try {
-            await fetch("/api/broll", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model: brollModel, mode }),
-            });
-          } catch {
-            console.error("B-roll generation failed");
-          }
-          advance("broll");
-          await new Promise((r) => setTimeout(r, 500));
-
-          // 6. Music
-          try {
-            await fetch("/api/music", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ mode, detail }),
-            });
-          } catch {
-            console.error("Music selection failed");
-          }
-          advance("music");
-          await new Promise((r) => setTimeout(r, 400));
-        }
-
-        // 7. Effects (premium)
-        if (mode !== "subtitles-only" && detail === "premium") {
-          advance("effects");
-          await new Promise((r) => setTimeout(r, 400));
-        }
-
-        // Done
-        advance("done");
-        await new Promise((r) => setTimeout(r, 600));
-
-        // Build timeline with generated content
-        buildTimeline(mode, detail);
+        // Build timeline with REAL collected data
+        buildTimeline(mode, detail, transcriptSegments, collectedBrollClips, musicTrack, analysisZoomMoments);
 
         // Transition to editor
         setIsProcessing(false);
@@ -1231,12 +1477,20 @@ export default function CineflowDashboard() {
   // ═════════════════════════════════════════════════════
 
   const buildTimeline = useCallback(
-    (mode: EditingMode, detail: AIDetailLevel) => {
+    (
+      mode: EditingMode,
+      detail: AIDetailLevel,
+      transcriptSegs?: TranscriptSegment[],
+      brollClipsData?: { suggestion: BrollSuggestion; clips: BrollClip[] }[],
+      music?: MusicTrack | null,
+      zoomData?: { timestamp: number; word: string; type: string }[],
+    ) => {
       if (!uploadedFile) return;
 
       const dur = uploadedFile.duration || 30;
+      const segs = transcriptSegs || transcript;
 
-      // Video clip
+      // ═══ VIDEO CLIP ═══
       dispatch({
         type: "ADD_CLIP",
         clip: {
@@ -1250,7 +1504,7 @@ export default function CineflowDashboard() {
         },
       });
 
-      // Audio clip
+      // ═══ ORIGINAL AUDIO CLIP ═══
       dispatch({
         type: "ADD_CLIP",
         clip: {
@@ -1264,97 +1518,121 @@ export default function CineflowDashboard() {
         },
       });
 
-      // Subtitle clips from transcript
-      const segs =
-        transcript.length > 0
-          ? transcript
-          : [
-              { id: "seg-1", text: "Welcome to this video", start: 0, end: 2, words: [] },
-              { id: "seg-2", text: "Today we are going to talk about AI", start: 2.5, end: 5, words: [] },
-              { id: "seg-3", text: "Let's get started", start: 5.5, end: 7, words: [] },
-            ];
-
-      segs.forEach((seg) => {
-        dispatch({
-          type: "ADD_CLIP",
-          clip: {
-            id: uid("sub"),
-            trackType: "subtitle",
-            trackIndex: 2,
-            startTime: seg.start,
-            duration: seg.end - seg.start,
-            label: seg.text,
-            style: captionStyle || undefined,
-          },
+      // ═══ SUBTITLE CLIPS FROM REAL TRANSCRIPT ═══
+      if (segs.length > 0) {
+        segs.forEach((seg) => {
+          dispatch({
+            type: "ADD_CLIP",
+            clip: {
+              id: uid("sub"),
+              trackType: "subtitle",
+              trackIndex: 2,
+              startTime: seg.start,
+              duration: seg.end - seg.start,
+              label: seg.text,
+              style: captionStyle || undefined,
+            },
+          });
         });
-      });
+      }
 
-      // B-roll clips (standard/premium, non subtitle-only)
+      // ═══ B-ROLL CLIPS FROM REAL API RESPONSES ═══
       if (mode !== "subtitles-only" && detail !== "quick") {
-        const brollTimes = [
-          { start: 3, dur: 2, label: "B-Roll: AI Technology" },
-          { start: 8, dur: 2.5, label: "B-Roll: Data Flow" },
-          { start: 15, dur: 3, label: "B-Roll: Innovation" },
-        ];
-        brollTimes.forEach((b) => {
-          if (b.start + b.dur <= dur) {
+        const brollData = brollClipsData || fetchedBrollClips;
+        brollData.forEach(({ suggestion, clips }) => {
+          if (clips.length > 0) {
+            const bestClip = clips[0]; // Use the first/best clip
             dispatch({
               type: "ADD_CLIP",
               clip: {
                 id: uid("broll"),
                 trackType: "broll",
                 trackIndex: 3,
-                startTime: b.start,
-                duration: b.dur,
-                label: b.label,
+                startTime: suggestion.timestamp,
+                duration: suggestion.duration || bestClip.duration || 3,
+                label: `B-Roll: ${suggestion.keyword}`,
+                src: bestClip.src,
               },
             });
           }
         });
 
-        // Music clip
-        dispatch({
-          type: "ADD_CLIP",
-          clip: {
-            id: uid("music"),
-            trackType: "audio",
-            trackIndex: 1,
-            startTime: 0,
-            duration: dur,
-            label: "♫ Background Music",
-          },
-        });
+        // ═══ MUSIC CLIP FROM REAL API RESPONSE ═══
+        const track = music || fetchedMusicTrack;
+        if (track) {
+          dispatch({
+            type: "ADD_CLIP",
+            clip: {
+              id: uid("music"),
+              trackType: "audio",
+              trackIndex: 1,
+              startTime: 0,
+              duration: Math.min(track.duration || dur, dur),
+              label: `♫ ${track.title} — ${track.artist}`,
+              src: track.previewUrl || track.downloadUrl,
+            },
+          });
+        }
       }
 
-      // Effects (premium)
+      // ═══ EFFECTS FROM ZOOM MOMENTS (premium) ═══
       if (mode !== "subtitles-only" && detail === "premium") {
-        dispatch({
-          type: "ADD_CLIP",
-          clip: {
-            id: uid("fx"),
-            trackType: "effect",
-            trackIndex: 4,
-            startTime: 0,
-            duration: 1.5,
-            label: "Zoom In (Hook)",
-            effectType: "zoom-in",
-          },
-        });
-        dispatch({
-          type: "ADD_CLIP",
-          clip: {
-            id: uid("fx"),
-            trackType: "effect",
-            trackIndex: 4,
-            startTime: dur - 3,
-            duration: 3,
-            label: "Ken Burns (Outro)",
-            effectType: "ken-burns",
-          },
-        });
+        const zooms = zoomData || zoomMoments;
+        if (zooms.length > 0) {
+          zooms.forEach((zm) => {
+            const effectTypeMap: Record<string, EffectType> = {
+              "quick-emphasis": "zoom-in",
+              "slow-zoom": "zoom-in",
+              "zoom-out": "zoom-out",
+              "zoom-pulse": "zoom-pulse",
+            };
+            const effectType = effectTypeMap[zm.type] || "zoom-in";
+            const effectDuration = zm.type === "slow-zoom" ? 2 : zm.type === "zoom-pulse" ? 1.5 : 0.8;
+            dispatch({
+              type: "ADD_CLIP",
+              clip: {
+                id: uid("fx"),
+                trackType: "effect",
+                trackIndex: 4,
+                startTime: zm.timestamp,
+                duration: effectDuration,
+                label: `${zm.type}: "${zm.word}"`,
+                effectType,
+              },
+            });
+          });
+        } else {
+          // Fallback: default hook + outro effects
+          dispatch({
+            type: "ADD_CLIP",
+            clip: {
+              id: uid("fx"),
+              trackType: "effect",
+              trackIndex: 4,
+              startTime: 0,
+              duration: 1.5,
+              label: "Zoom In (Hook)",
+              effectType: "zoom-in",
+            },
+          });
+          if (dur > 5) {
+            dispatch({
+              type: "ADD_CLIP",
+              clip: {
+                id: uid("fx"),
+                trackType: "effect",
+                trackIndex: 4,
+                startTime: dur - 3,
+                duration: 3,
+                label: "Ken Burns (Outro)",
+                effectType: "ken-burns",
+              },
+            });
+          }
+        }
       }
     },
-    [uploadedFile, transcript, captionStyle]
+    [uploadedFile, transcript, captionStyle, fetchedBrollClips, fetchedMusicTrack, zoomMoments]
   );
 
   // ═════════════════════════════════════════════════════
@@ -1809,7 +2087,7 @@ export default function CineflowDashboard() {
     if (isProcessing) {
       return (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <ProcessingView videoUrl={uploadedFile?.url || ""} steps={processingSteps} />
+          <ProcessingView videoUrl={uploadedFile?.url || ""} steps={processingSteps} errors={processingErrors} />
         </div>
       );
     }
@@ -2242,7 +2520,10 @@ export default function CineflowDashboard() {
                 objectFit: "contain",
                 display: "block",
               }}
+              controls={false}
+              autoPlay={false}
               playsInline
+              onTimeUpdate={handleVideoTimeUpdate}
               onClick={() => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
             />
 
