@@ -5,24 +5,9 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
 
-  // SharedArrayBuffer requires COOP/COEP headers for FFmpeg WASM
-  async headers() {
-    return [
-      {
-        source: "/(.*)",
-        headers: [
-          {
-            key: "Cross-Origin-Opener-Policy",
-            value: "same-origin",
-          },
-          {
-            key: "Cross-Origin-Embedder-Policy",
-            value: "require-corp",
-          },
-        ],
-      },
-    ];
-  },
+  // Note: COOP/COEP headers for FFmpeg WASM SharedArrayBuffer
+  // are applied dynamically in the export component only,
+  // NOT globally — global COEP breaks blob URL video playback.
 };
 
 export default nextConfig;
