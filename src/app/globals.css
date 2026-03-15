@@ -1,20 +1,133 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
-  --accent: #6c5ce7;
-  --accent-hover: #5a4bd1;
-  --card: #1a1a2e;
-  --card-hover: #222240;
-  --border: #2a2a4a;
-  --success: #00b894;
-  --warning: #fdcb6e;
-  --danger: #e17055;
+  --background: #09090b;
+  --foreground: #f5f5f5;
+  --accent: #8B5CF6;
+  --accent-hover: #7C3AED;
+  --accent-light: #A78BFA;
+  --panel: #111113;
+  --panel-hover: #18181b;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-accent: rgba(139, 92, 246, 0.3);
+  --success: #22c55e;
+  --warning: #FBBF24;
+  --danger: #ef4444;
+  --text-primary: #f5f5f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+}
+
+/* ─── Base ─────────────────────────────────────────────── */
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Selection ────────────────────────────────────────── */
+
+::selection {
+  background: rgba(139, 92, 246, 0.4);
+  color: #fff;
+}
+
+::-moz-selection {
+  background: rgba(139, 92, 246, 0.4);
+  color: #fff;
+}
+
+/* ─── Scrollbar (dark) ─────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.25);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.45);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.25) transparent;
+}
+
+/* ─── Global Animations ────────────────────────────────── */
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
+  50% { box-shadow: 0 0 12px 4px rgba(139, 92, 246, 0.2); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes progress-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ─── Utility Classes ──────────────────────────────────── */
+
+.glass {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+}
+
+.glass-hover:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-accent);
+}
+
+.accent-glow {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+}
+
+/* ─── Dashboard-specific ───────────────────────────────── */
+
+.dashboard-no-scroll {
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* Range input accent color override */
+input[type="range"] {
+  accent-color: var(--accent);
 }
