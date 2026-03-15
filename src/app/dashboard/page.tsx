@@ -1195,20 +1195,79 @@ export default function CineflowDashboard() {
       let musicTrack: MusicTrack | null = null;
 
       try {
-        // ═══ 1. TRANSCRIBE (server-side via Vercel Pro — supports large files) ═══
+        // ═══ 1. TRANSCRIBE (direct to OpenAI from browser — no Vercel body limit) ═══
         try {
+          // Get API key from lightweight server endpoint
+          const keyRes = await fetch("/api/whisper-key");
+          if (!keyRes.ok) throw new Error("Nepavyko gauti API rakto");
+          const { k: apiKey } = await keyRes.json();
+          if (!apiKey) throw new Error("API raktas nerastas");
+
+          // Send video directly to OpenAI Whisper API from the browser
           const fd = new FormData();
-          fd.append("file", uploadedFile.file);
+          fd.append("file", uploadedFile.file, uploadedFile.file.name || "video.mp4");
+          fd.append("model", "whisper-1");
+          fd.append("response_format", "verbose_json");
+          fd.append("timestamp_granularities[]", "word");
+          fd.append("timestamp_granularities[]", "segment");
           fd.append("language", "lt");
-          const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+
+          const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}` },
+            body: fd,
+          });
+
           if (!res.ok) {
-            const errData = await res.json().catch(() => ({ error: "Unknown error" }));
-            throw new Error(errData.error || `HTTP ${res.status}`);
+            const errText = await res.text();
+            console.error("[transcribe] Whisper error:", res.status, errText);
+            throw new Error(`Whisper API: ${res.status}`);
           }
+
           const data = await res.json();
-          if (data.segments && data.segments.length > 0) {
-            transcriptSegments = data.segments;
-            setTranscript(data.segments);
+          console.log("[transcribe] Response keys:", Object.keys(data));
+
+          // Parse segments
+          const segs = Array.isArray(data.segments) ? data.segments : [];
+          const words = Array.isArray(data.words) ? data.words : [];
+
+          const allWords = words.map((w: Record<string, unknown>) => ({
+            word: String(w.word || ""),
+            start: Number(w.start || 0),
+            end: Number(w.end || 0),
+          }));
+
+          const parsedSegments: TranscriptSegment[] = segs.map(
+            (seg: Record<string, unknown>, idx: number) => {
+              const segStart = Number(seg.start || 0);
+              const segEnd = Number(seg.end || 0);
+              const segWords = allWords.filter(
+                (w: { start: number; end: number }) => w.start >= segStart && w.end <= segEnd + 0.05
+              );
+              return {
+                id: `seg-${idx}`,
+                text: String(seg.text || "").trim(),
+                start: segStart,
+                end: segEnd,
+                words: segWords,
+              };
+            }
+          );
+
+          // Fallback: one segment from full text
+          if (parsedSegments.length === 0 && data.text) {
+            parsedSegments.push({
+              id: "seg-0",
+              text: String(data.text).trim(),
+              start: 0,
+              end: Number(data.duration || 0),
+              words: allWords,
+            });
+          }
+
+          if (parsedSegments.length > 0) {
+            transcriptSegments = parsedSegments;
+            setTranscript(parsedSegments);
           } else {
             throw new Error("Whisper negrąžino segmentų");
           }

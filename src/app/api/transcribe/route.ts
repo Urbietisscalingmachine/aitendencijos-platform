@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { TranscriptSegment, WordTimestamp } from "@/types/cineflow";
 
-export const runtime = "edge"; // Edge runtime has NO body size limit
+export const runtime = "edge";
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
