@@ -1042,7 +1042,7 @@ export default function CineflowDashboard() {
         duration: video.duration,
       });
       setProjectName(file.name.replace(/\.[^.]+$/, ""));
-      URL.revokeObjectURL(video.src);
+      // DO NOT revoke — URL is used throughout the app for video playback
     };
     video.src = url;
   }, []);
