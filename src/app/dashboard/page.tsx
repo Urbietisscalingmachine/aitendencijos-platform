@@ -1196,83 +1196,39 @@ export default function CineflowDashboard() {
       let musicTrack: MusicTrack | null = null;
 
       try {
-        // ═══ 0. EXTRACT AUDIO (client-side, to stay under Vercel 4.5MB limit) ═══
-        let fileToSend: File | Blob = uploadedFile.file;
+        // ═══ 0+1. TRANSCRIBE (always client-side — bypasses Vercel 4.5MB limit) ═══
+        advance("audio-prepare"); // skip audio prep step
+        await new Promise((r) => setTimeout(r, 100));
+        
         try {
-          const audioBlob = await extractAudioFromVideo(uploadedFile.file, (pct) => {
-            // Update step label with progress
-            currentSteps = currentSteps.map((s) =>
-              s.id === "audio-prepare" && s.status === "active"
-                ? { ...s, label: `🎧 Ruošiamas audio... ${Math.round(pct)}%` }
-                : s
-            );
-            setProcessingSteps([...currentSteps]);
-          });
-          if (audioBlob) {
-            fileToSend = new File([audioBlob], "audio.wav", { type: "audio/wav" });
-            console.log(
-              `[dashboard] Audio extracted: ${(fileToSend.size / 1024).toFixed(0)}KB (original: ${(uploadedFile.file.size / 1024 / 1024).toFixed(1)}MB)`
-            );
+          // Always call OpenAI Whisper directly from browser
+          // This bypasses Vercel's 4.5MB body size limit entirely
+          console.log("[dashboard] Using client-side Whisper API (direct to OpenAI)");
+          
+          // Get API key from server
+          const keyRes = await fetch("/api/transcribe", { method: "OPTIONS" });
+          const keyData = await keyRes.json().catch(() => null);
+          const apiKey = keyData?.key;
+          if (!apiKey) throw new Error("Nepavyko gauti API rakto");
+          
+          const result = await transcribeClientSide(
+            uploadedFile.file,
+            apiKey,
+            "lt",
+            (pct) => {
+              currentSteps = currentSteps.map((s) =>
+                s.id === "transcribe" && s.status === "active"
+                  ? { ...s, label: `⏳ Transkribuojama... ${Math.round(pct)}%` }
+                  : s
+              );
+              setProcessingSteps([...currentSteps]);
+            }
+          );
+          if (result && result.segments.length > 0) {
+            transcriptSegments = result.segments;
+            setTranscript(result.segments);
           } else {
-            // null means file was already small or extraction failed — use original
-            console.log("[dashboard] Using original file (small or extraction skipped)");
-          }
-        } catch (err) {
-          console.warn("[dashboard] Audio extraction failed, using original file:", err);
-          // Fallback: send original file
-        }
-        advance("audio-prepare");
-        await new Promise((r) => setTimeout(r, 200));
-
-        // ═══ 1. TRANSCRIBE ═══
-        // Strategy: try server-side first (small files), fall back to client-side Whisper API
-        const canUseServer = fileToSend.size <= 4 * 1024 * 1024; // 4MB Vercel limit
-        try {
-          if (canUseServer) {
-            // Server-side: file is small enough for Vercel
-            const fd = new FormData();
-            fd.append("file", fileToSend);
-            fd.append("language", "lt");
-            const res = await fetch("/api/transcribe", { method: "POST", body: fd });
-            if (!res.ok) {
-              const errData = await res.json().catch(() => ({ error: "Unknown error" }));
-              throw new Error(errData.error || `HTTP ${res.status}`);
-            }
-            const data = await res.json();
-            if (data.segments && data.segments.length > 0) {
-              transcriptSegments = data.segments;
-              setTranscript(data.segments);
-            } else {
-              throw new Error("Whisper negrąžino segmentų");
-            }
-          } else {
-            // Client-side: file too big for Vercel, call OpenAI Whisper directly from browser
-            console.log("[dashboard] File too large for server — using client-side Whisper API");
-            // Fetch API key from server (safe — doesn't expose in source)
-            const keyRes = await fetch("/api/transcribe", { method: "OPTIONS" });
-            const keyData = await keyRes.json().catch(() => null);
-            const apiKey = keyData?.key;
-            if (!apiKey) throw new Error("Nepavyko gauti API rakto");
-            
-            const result = await transcribeClientSide(
-              uploadedFile.file,
-              apiKey,
-              "lt",
-              (pct) => {
-                currentSteps = currentSteps.map((s) =>
-                  s.id === "transcribe" && s.status === "active"
-                    ? { ...s, label: `⏳ Transkribuojama... ${Math.round(pct)}%` }
-                    : s
-                );
-                setProcessingSteps([...currentSteps]);
-              }
-            );
-            if (result && result.segments.length > 0) {
-              transcriptSegments = result.segments;
-              setTranscript(result.segments);
-            } else {
-              throw new Error("Whisper negrąžino segmentų");
-            }
+            throw new Error("Whisper negrąžino segmentų");
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
