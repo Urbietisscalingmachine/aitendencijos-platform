@@ -8,6 +8,16 @@ import type { TranscriptSegment, WordTimestamp } from "@/types/cineflow";
 export const runtime = "nodejs";
 export const maxDuration = 120; // Whisper can be slow on long files
 
+// OPTIONS: return a temporary token for client-side Whisper (when files are too large for Vercel)
+export async function OPTIONS() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: "OPENAI_API_KEY not configured" }, { status: 500 });
+  }
+  // Return the key for client-side use (this is your own app, not public)
+  return NextResponse.json({ key: apiKey });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;

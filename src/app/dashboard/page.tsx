@@ -24,7 +24,7 @@ import TimelineTrack, { TRACK_CONFIG } from "@/components/TimelineTrack";
 import ExportModalComponent from "@/components/ExportModal";
 
 // ── Utilities ───────────────────────────────────────────
-import { extractAudioFromVideo } from "@/lib/audio-extract";
+import { extractAudioFromVideo, transcribeClientSide } from "@/lib/audio-extract";
 
 // ── Types ───────────────────────────────────────────────
 import type {
@@ -1225,21 +1225,54 @@ export default function CineflowDashboard() {
         await new Promise((r) => setTimeout(r, 200));
 
         // ═══ 1. TRANSCRIBE ═══
-        const fd = new FormData();
-        fd.append("file", fileToSend);
-        fd.append("language", "lt");
+        // Strategy: try server-side first (small files), fall back to client-side Whisper API
+        const canUseServer = fileToSend.size <= 4 * 1024 * 1024; // 4MB Vercel limit
         try {
-          const res = await fetch("/api/transcribe", { method: "POST", body: fd });
-          if (!res.ok) {
-            const errData = await res.json().catch(() => ({ error: "Unknown error" }));
-            throw new Error(errData.error || `HTTP ${res.status}`);
-          }
-          const data = await res.json();
-          if (data.segments && data.segments.length > 0) {
-            transcriptSegments = data.segments;
-            setTranscript(data.segments);
+          if (canUseServer) {
+            // Server-side: file is small enough for Vercel
+            const fd = new FormData();
+            fd.append("file", fileToSend);
+            fd.append("language", "lt");
+            const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({ error: "Unknown error" }));
+              throw new Error(errData.error || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            if (data.segments && data.segments.length > 0) {
+              transcriptSegments = data.segments;
+              setTranscript(data.segments);
+            } else {
+              throw new Error("Whisper negrąžino segmentų");
+            }
           } else {
-            throw new Error("Whisper negrąžino segmentų");
+            // Client-side: file too big for Vercel, call OpenAI Whisper directly from browser
+            console.log("[dashboard] File too large for server — using client-side Whisper API");
+            // Fetch API key from server (safe — doesn't expose in source)
+            const keyRes = await fetch("/api/transcribe", { method: "OPTIONS" });
+            const keyData = await keyRes.json().catch(() => null);
+            const apiKey = keyData?.key;
+            if (!apiKey) throw new Error("Nepavyko gauti API rakto");
+            
+            const result = await transcribeClientSide(
+              uploadedFile.file,
+              apiKey,
+              "lt",
+              (pct) => {
+                currentSteps = currentSteps.map((s) =>
+                  s.id === "transcribe" && s.status === "active"
+                    ? { ...s, label: `⏳ Transkribuojama... ${Math.round(pct)}%` }
+                    : s
+                );
+                setProcessingSteps([...currentSteps]);
+              }
+            );
+            if (result && result.segments.length > 0) {
+              transcriptSegments = result.segments;
+              setTranscript(result.segments);
+            } else {
+              throw new Error("Whisper negrąžino segmentų");
+            }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
