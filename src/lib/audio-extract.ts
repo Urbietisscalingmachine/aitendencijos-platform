@@ -102,48 +102,64 @@ export async function transcribeClientSide(
 
     onProgress?.(20);
 
-    const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: fd,
-    });
+    let data: Record<string, unknown>;
+    try {
+      const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: fd,
+      });
 
-    onProgress?.(80);
+      onProgress?.(80);
 
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error("[transcribe-client] Whisper API error:", res.status, errText);
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("[transcribe-client] Whisper API error:", res.status, errText);
+        return null;
+      }
+
+      data = await res.json();
+    } catch (fetchErr) {
+      console.error("[transcribe-client] Fetch failed:", fetchErr);
       return null;
     }
-
-    const data = await res.json();
+    
     onProgress?.(90);
+    console.log("[transcribe-client] Response keys:", Object.keys(data));
+    console.log("[transcribe-client] Segments count:", Array.isArray(data.segments) ? (data.segments as unknown[]).length : "none");
+    console.log("[transcribe-client] Text:", typeof data.text === "string" ? (data.text as string).substring(0, 100) : "none");
 
-    const allWords: WordTimestamp[] = (data.words ?? []).map((w: { word: string; start: number; end: number }) => ({
-      word: w.word,
-      start: w.start,
-      end: w.end,
+    const rawSegments = Array.isArray(data.segments) ? data.segments as Record<string, unknown>[] : [];
+    const rawWords = Array.isArray(data.words) ? data.words as Record<string, unknown>[] : [];
+
+    const allWords: WordTimestamp[] = rawWords.map((w) => ({
+      word: String(w.word || ""),
+      start: Number(w.start || 0),
+      end: Number(w.end || 0),
     }));
 
-    const segments: TranscriptSegment[] = (data.segments ?? []).map(
-      (seg: { text: string; start: number; end: number }, idx: number) => {
-        const segWords = allWords.filter((w) => w.start >= seg.start && w.end <= seg.end + 0.05);
+    const segments: TranscriptSegment[] = rawSegments.map(
+      (seg, idx: number) => {
+        const segStart = Number(seg.start || 0);
+        const segEnd = Number(seg.end || 0);
+        const segWords = allWords.filter((w) => w.start >= segStart && w.end <= segEnd + 0.05);
         return {
           id: `seg-${idx}`,
-          text: (seg.text ?? "").trim(),
-          start: seg.start,
-          end: seg.end,
+          text: String(seg.text || "").trim(),
+          start: segStart,
+          end: segEnd,
           words: segWords,
         };
       }
     );
 
-    if (segments.length === 0 && data.text) {
+    // Fallback: if no segments but we have text, create one big segment
+    if (segments.length === 0 && typeof data.text === "string" && (data.text as string).trim()) {
       segments.push({
         id: "seg-0",
-        text: data.text.trim(),
+        text: (data.text as string).trim(),
         start: 0,
-        end: data.duration ?? 0,
+        end: Number(data.duration || 0),
         words: allWords,
       });
     }
