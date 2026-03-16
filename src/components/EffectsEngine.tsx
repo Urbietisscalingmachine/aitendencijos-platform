@@ -50,9 +50,27 @@ interface ZoomPreset {
 
 const ZOOM_PRESETS: ZoomPreset[] = [
   {
+    id: "zoom-in",
+    label: "Zoom In",
+    description: "Smooth zoom in 1.0→1.5x over 2s",
+    effectType: "zoom-in",
+    icon: "🔍",
+    scaleRange: [1.0, 1.5],
+    speed: "medium",
+  },
+  {
+    id: "zoom-out",
+    label: "Zoom Out",
+    description: "Pull back 1.5x→1.0 over 2s",
+    effectType: "zoom-out",
+    icon: "🔭",
+    scaleRange: [1.5, 1.0],
+    speed: "medium",
+  },
+  {
     id: "ken-burns",
     label: "Ken Burns",
-    description: "Slow smooth zoom 0.5x→1.5x",
+    description: "Slow smooth zoom 0.5x→1.5x with pan",
     effectType: "ken-burns",
     icon: "🎬",
     scaleRange: [0.5, 1.5],
@@ -113,8 +131,8 @@ const COLOR_PRESETS: ColorPreset[] = [
     thumbnail: "linear-gradient(135deg, #f5af19 0%, #f12711 100%)",
   },
   {
-    id: "cold",
-    label: "Cold",
+    id: "cool",
+    label: "Cool",
     effectType: "color-cold",
     cssFilter: "saturate(0.8) hue-rotate(180deg) brightness(1.1)",
     thumbnail: "linear-gradient(135deg, #667eea 0%, #00d2ff 100%)",
@@ -148,10 +166,10 @@ const COLOR_PRESETS: ColorPreset[] = [
     thumbnail: "linear-gradient(135deg, #2c3e50 0%, #bdc3c7 100%)",
   },
   {
-    id: "moody",
-    label: "Moody",
-    effectType: "color-bw", // closest mapped type
-    cssFilter: "brightness(0.85) contrast(1.3) saturate(0.7)",
+    id: "dramatic",
+    label: "Dramatic",
+    effectType: "color-highcontrast",
+    cssFilter: "contrast(1.4) saturate(1.1) brightness(0.9) sepia(0.1)",
     thumbnail: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
   },
 ];
@@ -646,7 +664,15 @@ export default function EffectsEngine({
     };
     setTextOverlays((prev) => [...prev, newText]);
     setEditingText(newText);
-  }, [currentTime]);
+    // Add to timeline
+    const kf: EffectKeyframe = {
+      time: currentTime,
+      type: "text-overlay",
+      params: { text: "Your text here", font: "Inter", size: 32, color: "#ffffff", x: 50, y: 50, animation: "fade-in" },
+      duration: 3,
+    };
+    onAddEffect?.(kf);
+  }, [currentTime, onAddEffect]);
 
   const handleAddLowerThird = useCallback(() => {
     const lt: TextOverlay = {
@@ -665,7 +691,15 @@ export default function EffectsEngine({
     };
     setTextOverlays((prev) => [...prev, lt]);
     setEditingText(lt);
-  }, [currentTime]);
+    // Add to timeline
+    const kf: EffectKeyframe = {
+      time: currentTime,
+      type: "lower-third",
+      params: { text: "Name", subtitle: "Title / Role", font: "Montserrat", size: 24 },
+      duration: 4,
+    };
+    onAddEffect?.(kf);
+  }, [currentTime, onAddEffect]);
 
   const handleUpdateEditingText = useCallback(
     (updates: Partial<TextOverlay>) => {
@@ -692,16 +726,32 @@ export default function EffectsEngine({
       };
       setEmojiOverlays((prev) => [...prev, eo]);
       onEmojiOverlay?.(eo);
+      // Add to timeline
+      const kf: EffectKeyframe = {
+        time: currentTime,
+        type: "emoji",
+        params: { emoji, x: 50, y: 50, size: 48, animation: "pop" },
+        duration: 2,
+      };
+      onAddEffect?.(kf);
     },
-    [currentTime, onEmojiOverlay]
+    [currentTime, onEmojiOverlay, onAddEffect]
   );
 
   const handleTransition = useCallback(
     (def: TransitionDef) => {
       setSelectedTransition(def.id);
       onTransitionSelect?.(def.effectType, transitionDuration, applyToAll);
+      // Add to timeline
+      const kf: EffectKeyframe = {
+        time: currentTime,
+        type: def.effectType,
+        params: { applyToAll, direction: def.id === "wipe" ? "horizontal" : undefined },
+        duration: transitionDuration,
+      };
+      onAddEffect?.(kf);
     },
-    [transitionDuration, applyToAll, onTransitionSelect]
+    [currentTime, transitionDuration, applyToAll, onTransitionSelect, onAddEffect]
   );
 
   // ─── Render helpers ───────────────────

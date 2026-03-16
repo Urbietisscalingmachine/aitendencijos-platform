@@ -156,6 +156,13 @@ function timelineReducer(
         clips: state.clips.map((c) => (c.id === clip.id ? leftClip : c)).concat(rightClip),
       };
     }
+    case "UPDATE_CLIP":
+      return {
+        ...state,
+        clips: state.clips.map((c) =>
+          c.id === action.clipId ? { ...c, ...action.changes } : c
+        ),
+      };
     case "SET_TIME":
       return { ...state, currentTime: Math.max(0, Math.min(action.time, state.duration)) };
     case "SET_PLAYING":
@@ -730,6 +737,7 @@ export default function CineflowDashboard() {
 
   // ── Timeline UI state ──────────────────────────────
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
+  const [editingSubtitleId, setEditingSubtitleId] = useState<string | null>(null);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [trackMetas, setTrackMetas] = useState<
     Record<number, { muted: boolean; solo: boolean; locked: boolean; volume: number }>
@@ -809,6 +817,17 @@ export default function CineflowDashboard() {
     return timeline.clips.find(
       (c) =>
         c.trackType === "subtitle" &&
+        timeline.currentTime >= c.startTime &&
+        timeline.currentTime < c.startTime + c.duration
+    );
+  }, [timeline.clips, timeline.currentTime]);
+
+  // Active B-Roll clip for overlay on video preview
+  const activeBroll = useMemo(() => {
+    return timeline.clips.find(
+      (c) =>
+        c.trackType === "broll" &&
+        c.src &&
         timeline.currentTime >= c.startTime &&
         timeline.currentTime < c.startTime + c.duration
     );
@@ -1659,6 +1678,7 @@ export default function CineflowDashboard() {
                   startTime: clipStart,
                   duration: clipDuration,
                   label: text,
+                  words: chunk.map((w) => ({ word: w.word, start: w.start, end: w.end })),
                   style: captionStyle || undefined,
                 },
               });
@@ -1684,6 +1704,11 @@ export default function CineflowDashboard() {
                   startTime: clipStart,
                   duration: clipDuration,
                   label: text,
+                  words: chunk.map((w, wi) => ({
+                    word: w,
+                    start: clipStart + wi * wordDuration,
+                    end: clipStart + (wi + 1) * wordDuration,
+                  })),
                   style: captionStyle || undefined,
                 },
               });
@@ -1818,6 +1843,7 @@ export default function CineflowDashboard() {
                   startTime: chunk[0].start,
                   duration: Math.max(0.2, chunk[chunk.length - 1].end - chunk[0].start),
                   label: text,
+                  words: chunk.map((w) => ({ word: w.word, start: w.start, end: w.end })),
                   style,
                 },
               });
@@ -1828,15 +1854,21 @@ export default function CineflowDashboard() {
             const wordDur = segDur / Math.max(1, words.length);
             for (let i = 0; i < words.length; i += WORDS_PER_CLIP) {
               const chunk = words.slice(i, i + WORDS_PER_CLIP);
+              const chunkStart = seg.start + i * wordDur;
               dispatch({
                 type: "ADD_CLIP",
                 clip: {
                   id: uid("sub"),
                   trackType: "subtitle",
                   trackIndex: 2,
-                  startTime: seg.start + i * wordDur,
+                  startTime: chunkStart,
                   duration: Math.max(0.2, chunk.length * wordDur),
                   label: chunk.join(" "),
+                  words: chunk.map((w, wi) => ({
+                    word: w,
+                    start: chunkStart + wi * wordDur,
+                    end: chunkStart + (wi + 1) * wordDur,
+                  })),
                   style,
                 },
               });
@@ -1864,6 +1896,10 @@ export default function CineflowDashboard() {
   }, []);
 
   const handleAddEffect = useCallback((keyframe: EffectKeyframe) => {
+    // Prettier label from effect type
+    const effectLabel = keyframe.type
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
     dispatch({
       type: "ADD_CLIP",
       clip: {
@@ -1872,7 +1908,7 @@ export default function CineflowDashboard() {
         trackIndex: 4,
         startTime: keyframe.time,
         duration: keyframe.duration,
-        label: keyframe.type,
+        label: `✨ ${effectLabel}`,
         effectType: keyframe.type,
         effectParams: keyframe.params,
       },
@@ -1886,13 +1922,13 @@ export default function CineflowDashboard() {
         id: uid("music"),
         trackType: "audio",
         trackIndex: 1,
-        startTime: 0,
+        startTime: timeline.currentTime,
         duration: track.duration || 30,
         label: `♫ ${track.title}`,
         src: track.previewUrl || track.downloadUrl,
       },
     });
-  }, []);
+  }, [timeline.currentTime]);
 
   // ── Ruler click ────────────────────────────────────
   const handleRulerClick = useCallback(
@@ -2705,41 +2741,163 @@ export default function CineflowDashboard() {
               }}
               controls={false}
               autoPlay={false}
+              preload="metadata"
               playsInline
               onTimeUpdate={handleVideoTimeUpdate}
               onClick={() => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
             />
 
-            {/* Subtitle overlay */}
+            {/* Subtitle overlay — word-by-word highlight, no default background */}
             {activeSubtitle && (
               <div
                 style={{
                   position: "absolute",
-                  bottom: 40,
+                  bottom: activeSubtitle.style?.position === "top" ? "auto" : activeSubtitle.style?.position === "center" ? "50%" : 40,
+                  top: activeSubtitle.style?.position === "top" ? 40 : "auto",
                   left: "50%",
-                  transform: "translateX(-50%)",
+                  transform: activeSubtitle.style?.position === "center" ? "translate(-50%, 50%)" : "translateX(-50%)",
                   maxWidth: "80%",
                   textAlign: "center",
-                  pointerEvents: "none",
-                  zIndex: 10,
+                  pointerEvents: editingSubtitleId === activeSubtitle.id ? "auto" : "auto",
+                  zIndex: 16,
+                  cursor: "pointer",
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (editingSubtitleId !== activeSubtitle.id) {
+                    setEditingSubtitleId(activeSubtitle.id);
+                    dispatch({ type: "SET_PLAYING", playing: false });
+                  }
                 }}
               >
-                <span
-                  style={{
-                    display: "inline-block",
-                    padding: "8px 16px",
-                    borderRadius: 8,
-                    background: activeSubtitle.style?.backgroundColor || "rgba(0,0,0,0.75)",
-                    color: activeSubtitle.style?.color || "#fff",
-                    fontFamily: activeSubtitle.style?.fontFamily || "'Inter', sans-serif",
-                    fontSize: activeSubtitle.style?.fontSize ? Math.min(activeSubtitle.style.fontSize, 24) : 18,
-                    fontWeight: activeSubtitle.style?.fontWeight || 700,
-                    textShadow: activeSubtitle.style?.textShadow || "0 2px 4px rgba(0,0,0,0.5)",
-                    textTransform: (activeSubtitle.style?.textTransform as React.CSSProperties["textTransform"]) || "none",
-                  }}
-                >
-                  {activeSubtitle.label}
-                </span>
+                {editingSubtitleId === activeSubtitle.id ? (
+                  /* Inline editing mode */
+                  <input
+                    autoFocus
+                    defaultValue={activeSubtitle.label || ""}
+                    onBlur={(e) => {
+                      const newText = e.target.value.trim();
+                      if (newText && newText !== activeSubtitle.label) {
+                        dispatch({
+                          type: "UPDATE_CLIP",
+                          clipId: activeSubtitle.id,
+                          changes: { label: newText },
+                        });
+                      }
+                      setEditingSubtitleId(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        (e.target as HTMLInputElement).blur();
+                      } else if (e.key === "Escape") {
+                        setEditingSubtitleId(null);
+                      }
+                    }}
+                    style={{
+                      background: "rgba(0,0,0,0.6)",
+                      border: "2px solid #8B5CF6",
+                      borderRadius: 8,
+                      padding: "8px 16px",
+                      color: activeSubtitle.style?.color || "#fff",
+                      fontFamily: activeSubtitle.style?.fontFamily || "'Inter', sans-serif",
+                      fontSize: activeSubtitle.style?.fontSize ? Math.min(activeSubtitle.style.fontSize, 24) : 18,
+                      fontWeight: activeSubtitle.style?.fontWeight || 700,
+                      textAlign: "center",
+                      outline: "none",
+                      minWidth: 120,
+                      textTransform: (activeSubtitle.style?.textTransform as React.CSSProperties["textTransform"]) || "none",
+                    }}
+                  />
+                ) : (
+                  /* Display mode — word-by-word highlight */
+                  <span
+                    style={{
+                      display: "inline-block",
+                      padding: "8px 16px",
+                      borderRadius: 8,
+                      background: activeSubtitle.style?.backgroundColor || "transparent",
+                      fontFamily: activeSubtitle.style?.fontFamily || "'Inter', sans-serif",
+                      fontSize: activeSubtitle.style?.fontSize ? Math.min(activeSubtitle.style.fontSize, 24) : 18,
+                      fontWeight: activeSubtitle.style?.fontWeight || 700,
+                      textShadow: activeSubtitle.style?.textShadow || "0 1px 3px rgba(0,0,0,0.9), 0 2px 8px rgba(0,0,0,0.7)",
+                      textTransform: (activeSubtitle.style?.textTransform as React.CSSProperties["textTransform"]) || "none",
+                      WebkitTextStroke: activeSubtitle.style?.stroke || (!activeSubtitle.style?.backgroundColor ? "0.5px rgba(0,0,0,0.8)" : undefined),
+                      lineHeight: 1.4,
+                      ...activeSubtitle.style?.customCSS,
+                    }}
+                  >
+                    {activeSubtitle.words && activeSubtitle.words.length > 0 ? (
+                      activeSubtitle.words.map((word, i) => {
+                        const isActive = timeline.currentTime >= word.start && timeline.currentTime < word.end;
+                        const highlightColor = activeSubtitle.style?.highlightColor;
+                        const baseColor = activeSubtitle.style?.color || "#fff";
+                        return (
+                          <span
+                            key={i}
+                            style={{
+                              opacity: isActive ? 1 : 0.5,
+                              color: isActive ? (highlightColor || baseColor) : baseColor,
+                              transition: "opacity 0.1s, color 0.1s, transform 0.1s",
+                              display: "inline-block",
+                              transform: isActive ? "scale(1.05)" : "scale(1)",
+                              marginRight: "0.2em",
+                            }}
+                          >
+                            {word.word}
+                          </span>
+                        );
+                      })
+                    ) : (
+                      <span style={{ color: activeSubtitle.style?.color || "#fff" }}>
+                        {activeSubtitle.label}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* B-Roll overlay — shows B-Roll video on top of main video when active */}
+            {activeBroll && activeBroll.src && (
+              <video
+                key={activeBroll.id}
+                src={activeBroll.src}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  zIndex: 5,
+                  pointerEvents: "none",
+                  borderRadius: 12,
+                }}
+                autoPlay
+                muted
+                playsInline
+                loop
+              />
+            )}
+
+            {/* B-Roll label badge */}
+            {activeBroll && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  zIndex: 15,
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  background: "rgba(139, 92, 246, 0.85)",
+                  color: "#fff",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: 0.5,
+                  pointerEvents: "none",
+                }}
+              >
+                🎞️ B-ROLL
               </div>
             )}
 
@@ -2755,6 +2913,7 @@ export default function CineflowDashboard() {
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
+                zIndex: 20,
               }}
             >
               <button
@@ -2904,7 +3063,7 @@ export default function CineflowDashboard() {
               />
             )}
             {activeTab === "broll" && (
-              <BrollEngine transcript={transcript} suggestions={brollSuggestions} onAddClip={handleBrollAdd} />
+              <BrollEngine transcript={transcript} suggestions={brollSuggestions} onAddClip={handleBrollAdd} currentTime={timeline.currentTime} />
             )}
             {activeTab === "effects" && (
               <EffectsEngine

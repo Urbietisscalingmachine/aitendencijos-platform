@@ -29,6 +29,7 @@ interface BrollEngineProps {
   transcript: TranscriptSegment[];
   suggestions: BrollSuggestion[];
   onAddClip: (clip: BrollClip, timestamp: number) => void;
+  currentTime?: number;
   aspectRatio?: "16:9" | "9:16";
 }
 
@@ -127,6 +128,7 @@ export default function BrollEngine({
   transcript,
   suggestions,
   onAddClip,
+  currentTime = 0,
   aspectRatio = "16:9",
 }: BrollEngineProps) {
   const [activeTab, setActiveTab] = useState<TabId>("suggestions");
@@ -156,6 +158,9 @@ export default function BrollEngine({
   // Preview modal state
   const [previewClip, setPreviewClip] = useState<BrollClip | null>(null);
   const [previewTimestamp, setPreviewTimestamp] = useState(0);
+
+  // Suggestion context (for inserting at suggestion timestamp)
+  const [suggestionTimestamp, setSuggestionTimestamp] = useState<number | null>(null);
 
   // Hover preview
   const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
@@ -235,6 +240,7 @@ export default function BrollEngine({
   const handleSuggestionSearch = useCallback(
     (suggestion: BrollSuggestion) => {
       setSearchQuery(suggestion.pexelsQuery);
+      setSuggestionTimestamp(suggestion.timestamp);
       setActiveTab("search");
       // Auto-search
       setTimeout(async () => {
@@ -274,10 +280,13 @@ export default function BrollEngine({
 
   const addClipToTimeline = useCallback(
     (clip: BrollClip, timestamp: number) => {
-      onAddClip({ ...clip, overlayMode }, timestamp);
+      // Use suggestion timestamp if available, otherwise use passed timestamp (currentTime)
+      const insertTime = suggestionTimestamp !== null ? suggestionTimestamp : timestamp;
+      onAddClip({ ...clip, overlayMode }, insertTime);
       setPreviewClip(null);
+      setSuggestionTimestamp(null);
     },
-    [onAddClip, overlayMode]
+    [onAddClip, overlayMode, suggestionTimestamp]
   );
 
   // ── Hover preview ─────────────────────────────────────
@@ -478,7 +487,7 @@ export default function BrollEngine({
                   onMouseLeave={() => setHoveredClipId(null)}
                   onClick={() => {
                     setPreviewClip(clip);
-                    setPreviewTimestamp(0);
+                    setPreviewTimestamp(currentTime);
                   }}
                 >
                   <div style={styles.videoThumbWrap}>
@@ -507,6 +516,15 @@ export default function BrollEngine({
                   </div>
                   <div style={styles.videoMeta}>
                     <span style={styles.sourceBadge}>Pexels</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        addClipToTimeline(clip, currentTime);
+                      }}
+                      style={styles.addBtnSmall}
+                    >
+                      ➕ Add
+                    </button>
                   </div>
                 </div>
               ))}
@@ -756,7 +774,7 @@ export default function BrollEngine({
                   <button
                     onClick={() => {
                       setPreviewClip(generatedClip);
-                      setPreviewTimestamp(0);
+                      setPreviewTimestamp(currentTime);
                     }}
                     style={styles.btnPrimary}
                   >
@@ -1181,6 +1199,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   videoMeta: {
     padding: "8px 10px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   sourceBadge: {
     fontSize: 10,
@@ -1551,6 +1572,18 @@ const styles: Record<string, React.CSSProperties> = {
   modalOverlay: {
     display: "flex",
     gap: 6,
+  },
+  addBtnSmall: {
+    padding: "4px 10px",
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#fff",
+    background: "linear-gradient(135deg, #8B5CF6, #7C3AED)",
+    border: "none",
+    borderRadius: 6,
+    cursor: "pointer",
+    transition: "all 0.2s",
+    whiteSpace: "nowrap" as const,
   },
   addToTimelineBtn: {
     width: "100%",

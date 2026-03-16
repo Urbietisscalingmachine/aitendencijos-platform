@@ -50,6 +50,7 @@ export interface TimelineClip {
   sourceEnd?: number;
   src?: string; // url or blob
   label?: string;
+  words?: { word: string; start: number; end: number }[]; // word-level timestamps for subtitle clips
   style?: CaptionStyle;
   effectType?: EffectType;
   effectParams?: Record<string, unknown>;
@@ -70,6 +71,7 @@ export type TimelineAction =
   | { type: "MOVE_CLIP"; clipId: string; startTime: number; trackIndex: number }
   | { type: "TRIM_CLIP"; clipId: string; startTime: number; duration: number }
   | { type: "SPLIT_CLIP"; clipId: string; splitAt: number }
+  | { type: "UPDATE_CLIP"; clipId: string; changes: Partial<TimelineClip> }
   | { type: "SET_TIME"; time: number }
   | { type: "SET_PLAYING"; playing: boolean }
   | { type: "SET_ZOOM"; zoom: number }
