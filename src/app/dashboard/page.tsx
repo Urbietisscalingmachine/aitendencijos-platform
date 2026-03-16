@@ -1203,9 +1203,29 @@ export default function CineflowDashboard() {
           const { k: apiKey } = await keyRes.json();
           if (!apiKey) throw new Error("API raktas nerastas");
 
+          // Prepare file — ensure MP4 extension and reasonable size
+          let fileForWhisper: File = uploadedFile.file;
+          
+          // OpenAI Whisper limit is 25MB — if file is bigger, log warning
+          if (fileForWhisper.size > 25 * 1024 * 1024) {
+            console.warn(`[transcribe] File is ${(fileForWhisper.size/1048576).toFixed(1)}MB — exceeds Whisper 25MB limit`);
+          }
+          
+          // Ensure file has proper name with extension
+          const fileName = fileForWhisper.name || "video.mp4";
+          const ext = fileName.split(".").pop()?.toLowerCase();
+          // Whisper accepts: mp3, mp4, mpeg, mpga, m4a, wav, webm
+          const validExts = ["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "mov"];
+          if (!ext || !validExts.includes(ext)) {
+            // Rename to .mp4 
+            fileForWhisper = new File([fileForWhisper], "video.mp4", { type: "video/mp4" });
+          }
+
+          console.log(`[transcribe] Sending ${(fileForWhisper.size/1048576).toFixed(1)}MB ${fileForWhisper.name} to OpenAI`);
+
           // Send video directly to OpenAI Whisper API from the browser
           const fd = new FormData();
-          fd.append("file", uploadedFile.file, uploadedFile.file.name || "video.mp4");
+          fd.append("file", fileForWhisper, fileForWhisper.name);
           fd.append("model", "whisper-1");
           fd.append("response_format", "verbose_json");
           fd.append("timestamp_granularities[]", "word");
@@ -1221,11 +1241,12 @@ export default function CineflowDashboard() {
           if (!res.ok) {
             const errText = await res.text();
             console.error("[transcribe] Whisper error:", res.status, errText);
-            throw new Error(`Whisper API: ${res.status}`);
+            throw new Error(`Whisper klaida (${res.status}): ${errText.substring(0, 100)}`);
           }
 
           const data = await res.json();
           console.log("[transcribe] Response keys:", Object.keys(data));
+          console.log("[transcribe] Segments:", Array.isArray(data.segments) ? data.segments.length : "none");
 
           // Parse segments
           const segs = Array.isArray(data.segments) ? data.segments : [];
