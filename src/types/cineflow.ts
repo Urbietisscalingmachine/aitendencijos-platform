@@ -257,6 +257,67 @@ export interface StyleDNA {
   transitions: string;
 }
 
+// ─── Smart Cut ──────────────────────────────────────────
+export type SmartCutType = "filler" | "pause" | "repeat" | "low-substance";
+
+export interface SmartCut {
+  id: string;
+  start: number;
+  end: number;
+  type: SmartCutType;
+  label: string;
+  selected: boolean;
+}
+
+export interface SmartCutResult {
+  cuts: SmartCut[];
+  totalSaved: number; // seconds saved
+  originalDuration: number;
+  newDuration: number;
+}
+
+// ─── Smart Reframe ──────────────────────────────────────
+export type ReframeContentType = "talking-head" | "presentation" | "group" | "landscape" | "custom";
+
+export interface ReframePreset {
+  id: ReframeContentType;
+  label: string;
+  icon: string;
+  cropX: number;
+  cropY: number;
+  scale: number;
+  description: string;
+}
+
+// ─── AI Thumbnail ───────────────────────────────────────
+export interface ThumbnailResult {
+  id: string;
+  dataUrl: string; // base64 JPEG
+  text: string;
+  subtitle: string;
+  emotion: string;
+  frameTime: number;
+  selected: boolean;
+}
+
+export interface ThumbnailTextSuggestion {
+  title: string;
+  subtitle: string;
+  emotion: "shocked" | "happy" | "curious" | "serious" | "excited";
+}
+
+// ─── Voice Enhancement ─────────────────────────────────
+export type VoiceEnhancementPreset = "podcast" | "youtube" | "asmr" | "broadcast";
+
+export interface VoiceEnhancementSettings {
+  enabled: boolean;
+  preset: VoiceEnhancementPreset;
+  warmth: number;    // 0-100
+  clarity: number;   // 0-100
+  deess: number;     // 0-100
+  compress: number;  // 0-100
+}
+
 // ─── Project ────────────────────────────────────────────
 export interface CineflowProject {
   id: string;

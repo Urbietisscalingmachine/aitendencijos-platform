@@ -20,6 +20,11 @@ import PlaybackPreview from "@/components/PlaybackPreview";
 import BrollEngine from "@/components/BrollEngine";
 import EffectsEngine from "@/components/EffectsEngine";
 import AudioEngine from "@/components/AudioEngine";
+import SmartAIEngine from "@/components/SmartAIEngine";
+import SmartCutEngine from "@/components/SmartCutEngine";
+import SmartReframeEngine from "@/components/SmartReframeEngine";
+import ThumbnailGenerator from "@/components/ThumbnailGenerator";
+import VoiceEnhancement from "@/components/VoiceEnhancement";
 import TimelineTrack, { TRACK_CONFIG } from "@/components/TimelineTrack";
 import ExportModalComponent from "@/components/ExportModal";
 
@@ -45,6 +50,7 @@ import type {
   AspectRatioPreset,
   AspectRatioOption,
   CropPosition,
+  SmartCut,
 } from "@/types/cineflow";
 
 // ═════════════════════════════════════════════════════════
@@ -83,7 +89,7 @@ type Step = 1 | 2 | 3;
 type EditingMode = "ai-full-auto" | "reference-clone" | "subtitles-only" | null;
 type AIDetailLevel = "quick" | "standard" | "premium";
 type BrollModel = "kling-3.0" | "sora-2" | "veo-3.1";
-type RightPanelTab = "subtitles" | "broll" | "effects" | "audio";
+type RightPanelTab = "subtitles" | "broll" | "effects" | "audio" | "ai";
 
 interface ProcessingStep {
   id: string;
@@ -2451,6 +2457,44 @@ export default function CineflowDashboard() {
     });
   }, [timeline.currentTime]);
 
+  // ── Smart AI: Add clip callback ─────────────────────
+  const handleSmartAIAddClip = useCallback((clip: Omit<TimelineClip, "id">) => {
+    dispatch({
+      type: "ADD_CLIP",
+      clip: {
+        ...clip,
+        id: uid("smart"),
+      } as TimelineClip,
+    });
+  }, []);
+
+  // ── Smart AI: Update clip callback ─────────────────
+  const handleSmartAIUpdateClip = useCallback((clipId: string, changes: Partial<TimelineClip>) => {
+    dispatch({
+      type: "UPDATE_CLIP",
+      clipId,
+      changes,
+    });
+  }, []);
+
+  // ── Smart Cut: Apply cuts → add cut markers to timeline ──
+  const handleSmartCutApply = useCallback((cuts: SmartCut[]) => {
+    cuts.forEach((cut) => {
+      dispatch({
+        type: "ADD_CLIP",
+        clip: {
+          id: uid("smartcut"),
+          trackType: "effect",
+          trackIndex: 4,
+          startTime: cut.start,
+          duration: cut.end - cut.start,
+          label: `✂️ ${cut.type}: ${cut.label}`,
+          effectType: "transition-cut",
+        },
+      });
+    });
+  }, []);
+
   // ── Cleanup: Silence Removal → timeline cut markers ──
   const handleCleanupSilenceRemoval = useCallback((segments: SilenceSegment[], action: string) => {
     if (action === "cut" && segments.length > 0) {
@@ -3275,6 +3319,7 @@ export default function CineflowDashboard() {
     { id: "broll", label: "B-Roll", icon: "🎞️" },
     { id: "effects", label: "Effects", icon: "✨" },
     { id: "audio", label: "Audio", icon: "🎵" },
+    { id: "ai", label: "AI", icon: "🧠" },
   ];
 
   const renderStep3 = () => {
@@ -3545,6 +3590,40 @@ export default function CineflowDashboard() {
                 onSilenceRemoval={handleCleanupSilenceRemoval}
                 onNoiseRemovalChange={handleNoiseRemovalChange}
               />
+            )}
+            {mobileTab === "ai" && (
+              <div>
+                <SmartAIEngine
+                  transcript={transcript.map((s) => s.text).join(" ")}
+                  subtitleClips={timeline.clips.filter((c) => c.trackType === "subtitle")}
+                  currentTime={timeline.currentTime}
+                  totalDuration={timeline.duration}
+                  onAddClip={handleSmartAIAddClip}
+                  onUpdateClip={handleSmartAIUpdateClip}
+                />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+                <SmartCutEngine
+                  transcript={transcript}
+                  onApplyCuts={handleSmartCutApply}
+                  currentTime={timeline.currentTime}
+                  onSeek={(t) => dispatch({ type: "SET_TIME", time: t })}
+                />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+                <SmartReframeEngine
+                  currentAspectRatio={aspectRatio}
+                  cropPosition={cropPosition}
+                  onCropChange={setCropPosition}
+                  onAspectRatioChange={setAspectRatio}
+                />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+                <ThumbnailGenerator
+                  videoRef={editorVideoRef}
+                  transcript={transcript}
+                  videoDuration={timeline.duration}
+                />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+                <VoiceEnhancement videoRef={editorVideoRef} />
+              </div>
             )}
           </div>
         </div>
@@ -4126,6 +4205,40 @@ export default function CineflowDashboard() {
                 onSilenceRemoval={handleCleanupSilenceRemoval}
                 onNoiseRemovalChange={handleNoiseRemovalChange}
               />
+            )}
+            {activeTab === "ai" && (
+              <div>
+                <SmartAIEngine
+                  transcript={transcript.map((s) => s.text).join(" ")}
+                  subtitleClips={timeline.clips.filter((c) => c.trackType === "subtitle")}
+                  currentTime={timeline.currentTime}
+                  totalDuration={timeline.duration}
+                  onAddClip={handleSmartAIAddClip}
+                  onUpdateClip={handleSmartAIUpdateClip}
+                />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+                <SmartCutEngine
+                  transcript={transcript}
+                  onApplyCuts={handleSmartCutApply}
+                  currentTime={timeline.currentTime}
+                  onSeek={(t) => dispatch({ type: "SET_TIME", time: t })}
+                />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+                <SmartReframeEngine
+                  currentAspectRatio={aspectRatio}
+                  cropPosition={cropPosition}
+                  onCropChange={setCropPosition}
+                  onAspectRatioChange={setAspectRatio}
+                />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+                <ThumbnailGenerator
+                  videoRef={editorVideoRef}
+                  transcript={transcript}
+                  videoDuration={timeline.duration}
+                />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+                <VoiceEnhancement videoRef={editorVideoRef} />
+              </div>
             )}
           </div>
         </div>
