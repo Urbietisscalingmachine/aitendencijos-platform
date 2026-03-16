@@ -27,10 +27,10 @@ async function getFFmpeg(): Promise<FFmpeg> {
   try {
     const ffmpeg = new FFmpeg();
     
-    // Load FFmpeg WASM with CORS-friendly URLs
+    // Load FFmpeg WASM
     await ffmpeg.load({
-      coreURL: "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.js",
-      wasmURL: "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.wasm",
+      coreURL: "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js",
+      wasmURL: "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm",
     });
     
     ffmpegInstance = ffmpeg;
@@ -51,13 +51,33 @@ export async function extractAudioForWhisper(
 
   try {
     onProgress?.("Ruošiamas FFmpeg...", 5);
-    const ffmpeg = await getFFmpeg();
+    console.log("[ffmpeg-extract] Starting, file size:", (videoFile.size / 1048576).toFixed(1), "MB");
+    
+    let ffmpeg: FFmpeg;
+    try {
+      ffmpeg = await getFFmpeg();
+      console.log("[ffmpeg-extract] FFmpeg loaded successfully");
+    } catch (loadErr) {
+      console.error("[ffmpeg-extract] FFmpeg load failed:", loadErr);
+      throw new Error(`FFmpeg nepavyko užkrauti: ${loadErr}`);
+    }
 
     onProgress?.("Įkeliamas video...", 15);
     
     // Write input file to FFmpeg virtual filesystem
     const inputName = "input" + getExtension(videoFile.name);
-    const inputData = await fetchFile(videoFile);
+    console.log("[ffmpeg-extract] Writing file to vfs:", inputName);
+    let inputData: Uint8Array;
+    try {
+      inputData = await fetchFile(videoFile);
+      console.log("[ffmpeg-extract] File read OK:", inputData.length, "bytes");
+    } catch (readErr) {
+      console.error("[ffmpeg-extract] fetchFile failed:", readErr);
+      // Fallback: read via arrayBuffer
+      const buf = await videoFile.arrayBuffer();
+      inputData = new Uint8Array(buf);
+      console.log("[ffmpeg-extract] Fallback arrayBuffer OK:", inputData.length, "bytes");
+    }
     await ffmpeg.writeFile(inputName, inputData);
 
     onProgress?.("Ištraukiamas audio...", 30);
