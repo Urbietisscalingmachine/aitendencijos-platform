@@ -40,6 +40,8 @@ import type {
   EffectKeyframe,
   EffectType,
   MusicTrack,
+  NoiseRemovalSettings,
+  SilenceSegment,
 } from "@/types/cineflow";
 
 // ═════════════════════════════════════════════════════════
@@ -727,6 +729,24 @@ export default function CineflowDashboard() {
     silenceSpeedMultiplier: 3,
   });
 
+  // ── Noise Removal Audio Chain ─────────────────────
+  const [noiseRemovalSettings, setNoiseRemovalSettings] = useState<NoiseRemovalSettings>({
+    enabled: false,
+    preset: "medium",
+    highpassFreq: 80,
+    lowpassFreq: 12000,
+    gateThreshold: -50,
+    voiceBoost: 3,
+  });
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const noiseChainRef = useRef<{
+    highpass: BiquadFilterNode;
+    lowpass: BiquadFilterNode;
+    compressor: DynamicsCompressorNode;
+    voiceBoost: BiquadFilterNode;
+  } | null>(null);
+
   // ── Timeline (with undo/redo) ──────────────────────
   const [hist, dispatch] = useReducer(historyReducer, {
     past: [],
@@ -766,6 +786,12 @@ export default function CineflowDashboard() {
     origTrackIndex: number;
   } | null>(null);
   const editorVideoRef = useRef<HTMLVideoElement>(null);
+
+  // ── Active Effects State (video preview CSS) ──────
+  const [activeFilterCSS, setActiveFilterCSS] = useState<string>("");
+  const [activeFilterOverlay, setActiveFilterOverlay] = useState<React.CSSProperties | null>(null);
+  const [activeZoomCSS, setActiveZoomCSS] = useState<string>("");
+  const [activeZoomTransition, setActiveZoomTransition] = useState<string>("");
 
   // ═════════════════════════════════════════════════════
   // INJECT GLOBAL STYLES
@@ -833,6 +859,34 @@ export default function CineflowDashboard() {
     );
   }, [timeline.clips, timeline.currentTime]);
 
+  // Active effect clip for real-time filter/zoom from timeline
+  const activeEffectClip = useMemo(() => {
+    return timeline.clips.find(
+      (c) =>
+        c.trackType === "effect" &&
+        c.effectType &&
+        timeline.currentTime >= c.startTime &&
+        timeline.currentTime < c.startTime + c.duration
+    );
+  }, [timeline.clips, timeline.currentTime]);
+
+  // Auto-apply filter/zoom from active timeline effect clips
+  useEffect(() => {
+    if (!activeEffectClip) return; // Don't clear — manual selections should persist
+    const params = activeEffectClip.effectParams || {};
+    const cssFilter = params.cssFilter as string | undefined;
+    const cssTransform = params.cssTransform as string | undefined;
+    const cssTransition = params.cssTransition as string | undefined;
+
+    if (cssFilter && cssFilter !== "none") {
+      setActiveFilterCSS(cssFilter);
+    }
+    if (cssTransform) {
+      setActiveZoomCSS(cssTransform);
+      if (cssTransition) setActiveZoomTransition(cssTransition);
+    }
+  }, [activeEffectClip]);
+
   // Sync timeline currentTime from video timeupdate for smoother subtitle tracking
   const handleVideoTimeUpdate = useCallback(() => {
     if (editorVideoRef.current && !timeline.playing) {
@@ -876,6 +930,78 @@ export default function CineflowDashboard() {
       if (!timeline.playing && !video.paused) video.pause();
     }
   }, [timeline.currentTime, timeline.playing, currentStep]);
+
+  // ── Noise Removal Audio Chain ─────────────────────
+  useEffect(() => {
+    const video = editorVideoRef.current;
+    if (!video || currentStep !== 3) return;
+
+    if (noiseRemovalSettings.enabled) {
+      // Create AudioContext and chain if not exist
+      if (!audioContextRef.current) {
+        try {
+          const ctx = new AudioContext();
+          audioContextRef.current = ctx;
+
+          const source = ctx.createMediaElementSource(video);
+          mediaSourceRef.current = source;
+
+          const highpass = ctx.createBiquadFilter();
+          highpass.type = "highpass";
+          highpass.frequency.value = noiseRemovalSettings.highpassFreq;
+
+          const lowpass = ctx.createBiquadFilter();
+          lowpass.type = "lowpass";
+          lowpass.frequency.value = noiseRemovalSettings.lowpassFreq;
+
+          const compressor = ctx.createDynamicsCompressor();
+          compressor.threshold.value = noiseRemovalSettings.gateThreshold;
+          compressor.knee.value = 40;
+          compressor.ratio.value = 12;
+          compressor.attack.value = 0;
+          compressor.release.value = 0.25;
+
+          const voiceBoost = ctx.createBiquadFilter();
+          voiceBoost.type = "peaking";
+          voiceBoost.frequency.value = 2500;
+          voiceBoost.gain.value = noiseRemovalSettings.voiceBoost;
+
+          source.connect(highpass);
+          highpass.connect(lowpass);
+          lowpass.connect(compressor);
+          compressor.connect(voiceBoost);
+          voiceBoost.connect(ctx.destination);
+
+          noiseChainRef.current = { highpass, lowpass, compressor, voiceBoost };
+        } catch (err) {
+          console.error("[noise-removal] Failed to create audio chain:", err);
+        }
+      } else if (noiseChainRef.current) {
+        // Update existing chain params
+        const chain = noiseChainRef.current;
+        chain.highpass.frequency.value = noiseRemovalSettings.highpassFreq;
+        chain.lowpass.frequency.value = noiseRemovalSettings.lowpassFreq;
+        chain.compressor.threshold.value = noiseRemovalSettings.gateThreshold;
+        chain.voiceBoost.gain.value = noiseRemovalSettings.voiceBoost;
+      }
+    } else {
+      // Disabled — bypass: reconnect source directly to destination
+      if (audioContextRef.current && mediaSourceRef.current && noiseChainRef.current) {
+        try {
+          const chain = noiseChainRef.current;
+          chain.voiceBoost.disconnect();
+          chain.compressor.disconnect();
+          chain.lowpass.disconnect();
+          chain.highpass.disconnect();
+          mediaSourceRef.current.disconnect();
+          mediaSourceRef.current.connect(audioContextRef.current.destination);
+          noiseChainRef.current = null;
+        } catch (err) {
+          console.error("[noise-removal] Disconnect error:", err);
+        }
+      }
+    }
+  }, [noiseRemovalSettings, currentStep]);
 
   // ═════════════════════════════════════════════════════
   // SNAP HELPER
@@ -1915,6 +2041,27 @@ export default function CineflowDashboard() {
     });
   }, []);
 
+  // ── Effects Engine integration callbacks ────────────
+  const handleFilterChange = useCallback((filter: { cssFilter: string; overlayCSS?: React.CSSProperties; filterId: string } | null) => {
+    if (!filter) {
+      setActiveFilterCSS("");
+      setActiveFilterOverlay(null);
+    } else {
+      setActiveFilterCSS(filter.cssFilter !== "none" ? filter.cssFilter : "");
+      setActiveFilterOverlay(filter.overlayCSS || null);
+    }
+  }, []);
+
+  const handleZoomChange = useCallback((zoom: { cssTransform: string; cssTransition: string; zoomId: string } | null) => {
+    if (!zoom) {
+      setActiveZoomCSS("");
+      setActiveZoomTransition("");
+    } else {
+      setActiveZoomCSS(zoom.cssTransform);
+      setActiveZoomTransition(zoom.cssTransition);
+    }
+  }, []);
+
   const handleAddMusicTrack = useCallback((track: MusicTrack) => {
     dispatch({
       type: "ADD_CLIP",
@@ -1929,6 +2076,33 @@ export default function CineflowDashboard() {
       },
     });
   }, [timeline.currentTime]);
+
+  // ── Cleanup: Silence Removal → timeline cut markers ──
+  const handleCleanupSilenceRemoval = useCallback((segments: SilenceSegment[], action: string) => {
+    if (action === "cut" && segments.length > 0) {
+      // Add cut marker clips to the effects track for each segment
+      segments.forEach((seg) => {
+        dispatch({
+          type: "ADD_CLIP",
+          clip: {
+            id: uid("cut"),
+            trackType: "effect",
+            trackIndex: 4,
+            startTime: seg.start,
+            duration: seg.duration,
+            label: `✂️ Cut ${seg.type === "breath" ? "(breath)" : "(silence)"}`,
+            effectType: "transition-cut",
+          },
+        });
+      });
+    }
+  }, []);
+
+  // ── Cleanup: Noise Removal settings change ──
+  const handleNoiseRemovalChange = useCallback((settings: NoiseRemovalSettings) => {
+    setNoiseRemovalSettings(settings);
+    setAudioSettings((prev) => ({ ...prev, noiseRemoval: settings }));
+  }, []);
 
   // ── Ruler click ────────────────────────────────────
   const handleRulerClick = useCallback(
@@ -2729,7 +2903,7 @@ export default function CineflowDashboard() {
               justifyContent: "center",
             }}
           >
-            {/* Real HTML5 video */}
+            {/* Real HTML5 video — with active filter & zoom CSS */}
             <video
               ref={editorVideoRef}
               src={uploadedFile?.url || ""}
@@ -2738,6 +2912,9 @@ export default function CineflowDashboard() {
                 height: "100%",
                 objectFit: "contain",
                 display: "block",
+                filter: activeFilterCSS || undefined,
+                transform: activeZoomCSS || undefined,
+                transition: `${activeZoomTransition || "transform 0.3s ease"}, filter 0.5s ease`,
               }}
               controls={false}
               autoPlay={false}
@@ -2746,6 +2923,20 @@ export default function CineflowDashboard() {
               onTimeUpdate={handleVideoTimeUpdate}
               onClick={() => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
             />
+
+            {/* Filter overlay (for vignette, cinematic bars, light leak, etc.) */}
+            {activeFilterOverlay && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 4,
+                  pointerEvents: "none",
+                  borderRadius: 12,
+                  ...activeFilterOverlay,
+                }}
+              />
+            )}
 
             {/* Subtitle overlay — word-by-word highlight, no default background */}
             {activeSubtitle && (
@@ -3071,14 +3262,20 @@ export default function CineflowDashboard() {
                 currentTime={timeline.currentTime}
                 totalDuration={timeline.duration}
                 onAddEffect={handleAddEffect}
+                onFilterChange={handleFilterChange}
+                onZoomChange={handleZoomChange}
+                zoomMoments={zoomMoments}
               />
             )}
             {activeTab === "audio" && (
               <AudioEngine
                 audioUrl={uploadedFile?.url || ""}
+                videoFile={uploadedFile?.file}
                 transcript={transcript.map((s) => s.text).join(" ")}
                 onSettingsChange={setAudioSettings}
                 onAddTrack={handleAddMusicTrack}
+                onSilenceRemoval={handleCleanupSilenceRemoval}
+                onNoiseRemovalChange={handleNoiseRemovalChange}
               />
             )}
           </div>
@@ -3429,8 +3626,8 @@ export default function CineflowDashboard() {
           segments={transcript}
           captionStyle={
             captionStyle || {
-              id: "classic-default",
-              name: "Default",
+              id: "classic-clean-white",
+              name: "Clean White",
               category: "classic",
               fontFamily: "'Inter', sans-serif",
               fontSize: 28,

@@ -21,7 +21,7 @@ export interface TranscriptSegment {
 export interface CaptionStyle {
   id: string;
   name: string;
-  category: "classic" | "creator" | "animated" | "stylized" | "social" | "special";
+  category: "classic" | "creator" | "animated" | "stylized" | "social" | "special" | "color" | "minimal";
   fontFamily: string;
   fontSize: number;
   fontWeight: number;
@@ -104,13 +104,35 @@ export interface BrollClip {
 export type EffectType =
   | "zoom-in" | "zoom-out" | "ken-burns"
   | "zoom-shake" | "zoom-pulse"
+  | "zoom-fast-punch" | "zoom-dolly" | "zoom-snap" | "zoom-bounce"
+  | "zoom-breathe" | "zoom-focus-pull" | "zoom-dramatic-push"
   | "color-warm" | "color-cold" | "color-cinematic" | "color-vintage"
   | "color-highcontrast" | "color-bw"
+  | "color-warm-sunset" | "color-cool-blue" | "color-vintage-film"
+  | "color-dramatic" | "color-teal-orange" | "color-film-noir"
+  | "color-bleach-bypass" | "color-golden-hour" | "color-moonlight"
+  | "color-pastel" | "color-matte" | "color-faded"
+  | "color-cyberpunk" | "color-neon-night" | "color-nordic"
+  | "color-desert" | "color-forest" | "color-ocean"
+  | "color-tropical" | "color-high-key" | "color-low-key"
+  | "color-cinematic-orange"
   | "blur" | "vignette" | "grain" | "sharpen"
+  | "filter-blur" | "filter-sharpen" | "filter-vignette" | "filter-warm"
+  | "filter-cool" | "filter-vintage" | "filter-sepia" | "filter-bw"
+  | "filter-high-contrast" | "filter-low-contrast" | "filter-saturated"
+  | "filter-desaturated" | "filter-film-grain" | "filter-glitch"
+  | "filter-chromatic" | "filter-duotone" | "filter-split-tone"
+  | "filter-cross-process" | "filter-teal-orange" | "filter-cinematic-bars"
+  | "filter-light-leak" | "filter-lens-flare" | "filter-bokeh"
+  | "filter-motion-blur" | "filter-pixelate" | "filter-posterize"
+  | "filter-solarize" | "filter-emboss" | "filter-hdr" | "filter-dreamy-glow"
   | "text-overlay" | "lower-third" | "title-animated"
   | "emoji" | "sticker"
   | "transition-cut" | "transition-crossfade" | "transition-slide"
-  | "transition-zoom" | "transition-glitch";
+  | "transition-zoom" | "transition-glitch"
+  | "transition-fade" | "transition-slide-left" | "transition-slide-right"
+  | "transition-slide-up" | "transition-wipe" | "transition-spin"
+  | "transition-blur" | "transition-flash" | "transition-glitch-rgb";
 
 export interface EffectKeyframe {
   time: number;
@@ -141,12 +163,36 @@ export interface AudioSettings {
   silenceThreshold: number; // dB
   silenceAction: "cut" | "speedup" | "none";
   silenceSpeedMultiplier: number; // 2x-6x for speedup
+  noiseRemoval?: NoiseRemovalSettings;
 }
 
 export interface SilenceSegment {
   start: number;
   end: number;
   duration: number;
+  type?: "silence" | "breath";
+  selected?: boolean;
+}
+
+// ─── Audio Cleanup (Noise Removal + Silence Detection) ──
+export type NoiseRemovalPreset = "light" | "medium" | "strong" | "voice-focus";
+export type SilenceSensitivity = "aggressive" | "moderate" | "gentle";
+
+export interface NoiseRemovalSettings {
+  enabled: boolean;
+  preset: NoiseRemovalPreset;
+  highpassFreq: number;   // 20-200 Hz
+  lowpassFreq: number;    // 8000-20000 Hz
+  gateThreshold: number;  // -60 to -20 dB
+  voiceBoost: number;     // 0-6 dB
+}
+
+export interface SilenceDetectionResult {
+  segments: SilenceSegment[];
+  silenceCount: number;
+  breathCount: number;
+  totalSilenceDuration: number;
+  totalBreathDuration: number;
 }
 
 // ─── Style Clone (Reference) ────────────────────────────

@@ -7,18 +7,20 @@
    ═══════════════════════════════════════════════════════════ */
 
 import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import type { MusicTrack, AudioSettings, SilenceSegment } from "@/types/cineflow";
+import type { MusicTrack, AudioSettings, SilenceSegment, NoiseRemovalSettings, NoiseRemovalPreset, SilenceSensitivity } from "@/types/cineflow";
 import AudioWaveform from "./AudioWaveform";
 
 // ── Types ────────────────────────────────────────────────
-type Tab = "music" | "silence" | "ducking" | "mix" | "sfx";
+type Tab = "music" | "silence" | "ducking" | "mix" | "sfx" | "cleanup";
 
 interface AudioEngineProps {
   audioUrl?: string;
+  videoFile?: File;
   transcript?: string;
   onSettingsChange?: (settings: AudioSettings) => void;
   onAddTrack?: (track: MusicTrack) => void;
   onSilenceRemoval?: (segments: SilenceSegment[], action: string) => void;
+  onNoiseRemovalChange?: (settings: NoiseRemovalSettings) => void;
 }
 
 interface SoundEffect {
@@ -89,6 +91,18 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+      </svg>
+    ),
+  },
+  {
+    id: "cleanup",
+    label: "🔇 Cleanup",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+        <line x1="12" y1="19" x2="12" y2="23" />
+        <line x1="8" y1="23" x2="16" y2="23" />
       </svg>
     ),
   },
@@ -185,10 +199,12 @@ const BUILTIN_SFX: Record<string, SoundEffect[]> = {
 // ═════════════════════════════════════════════════════════
 export default function AudioEngine({
   audioUrl = "",
+  videoFile,
   transcript = "",
   onSettingsChange,
   onAddTrack,
   onSilenceRemoval,
+  onNoiseRemovalChange,
 }: AudioEngineProps) {
   // ── State ──────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<Tab>("music");
@@ -238,6 +254,22 @@ export default function AudioEngine({
   const [sfxSearchQuery, setSfxSearchQuery] = useState("");
   const [freesoundResults, setFreesoundResults] = useState<SoundEffect[]>([]);
   const [isLoadingSfx, setIsLoadingSfx] = useState(false);
+
+  // Cleanup — Silence/Breath Detection
+  const [cleanupSensitivity, setCleanupSensitivity] = useState<SilenceSensitivity>("moderate");
+  const [cleanupDetectedSegments, setCleanupDetectedSegments] = useState<SilenceSegment[]>([]);
+  const [cleanupIsDetecting, setCleanupIsDetecting] = useState(false);
+  const [cleanupDetectionDone, setCleanupDetectionDone] = useState(false);
+
+  // Cleanup — Noise Removal
+  const [noiseRemovalSettings, setNoiseRemovalSettings] = useState<NoiseRemovalSettings>({
+    enabled: false,
+    preset: "medium",
+    highpassFreq: 80,
+    lowpassFreq: 12000,
+    gateThreshold: -50,
+    voiceBoost: 3,
+  });
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -611,6 +643,29 @@ export default function AudioEngine({
                 downloadUrl: sfx.previewUrl,
                 source: "freesound",
               });
+            }}
+          />
+        )}
+
+        {activeTab === "cleanup" && (
+          <AudioCleanupTab
+            audioUrl={audioUrl}
+            videoFile={videoFile}
+            sensitivity={cleanupSensitivity}
+            setSensitivity={setCleanupSensitivity}
+            detectedSegments={cleanupDetectedSegments}
+            setDetectedSegments={setCleanupDetectedSegments}
+            isDetecting={cleanupIsDetecting}
+            setIsDetecting={setCleanupIsDetecting}
+            detectionDone={cleanupDetectionDone}
+            setDetectionDone={setCleanupDetectionDone}
+            noiseRemoval={noiseRemovalSettings}
+            setNoiseRemoval={(settings) => {
+              setNoiseRemovalSettings(settings);
+              onNoiseRemovalChange?.(settings);
+            }}
+            onRemoveSelected={(segments) => {
+              onSilenceRemoval?.(segments, "cut");
             }}
           />
         )}
@@ -1849,6 +1904,570 @@ function SoundEffectsTab({
                 </button>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════
+// AUDIO CLEANUP TAB (Silence/Breath Detection + Noise Removal)
+// ═════════════════════════════════════════════════════════
+
+const SENSITIVITY_PRESETS: Record<SilenceSensitivity, { threshold: number; minDuration: number; breathMax: number; label: string }> = {
+  aggressive: { threshold: -35, minDuration: 0.2, breathMax: 0.3, label: "Aggressive" },
+  moderate: { threshold: -40, minDuration: 0.3, breathMax: 0.35, label: "Moderate" },
+  gentle: { threshold: -45, minDuration: 0.5, breathMax: 0.4, label: "Gentle" },
+};
+
+const NOISE_PRESETS: Record<NoiseRemovalPreset, { highpass: number; lowpass: number; gate: number; voiceBoost: number; label: string; desc: string }> = {
+  light: { highpass: 40, lowpass: 16000, gate: -55, voiceBoost: 1, label: "Light", desc: "Minimal filtering" },
+  medium: { highpass: 80, lowpass: 12000, gate: -50, voiceBoost: 3, label: "Medium", desc: "Balanced" },
+  strong: { highpass: 120, lowpass: 10000, gate: -40, voiceBoost: 4, label: "Strong", desc: "Aggressive" },
+  "voice-focus": { highpass: 100, lowpass: 8000, gate: -45, voiceBoost: 6, label: "Voice Focus", desc: "Max clarity" },
+};
+
+// ── Silence detection logic ─────────────────────────────
+async function analyzeAudioForSilences(
+  audioBuffer: AudioBuffer,
+  thresholdDb: number,
+  minSilenceDuration: number,
+  breathMaxDuration: number,
+): Promise<SilenceSegment[]> {
+  const channelData = audioBuffer.getChannelData(0);
+  const sampleRate = audioBuffer.sampleRate;
+  const thresholdLinear = Math.pow(10, thresholdDb / 20);
+
+  // Use RMS with a window of ~20ms
+  const windowSize = Math.floor(sampleRate * 0.02);
+  const segments: SilenceSegment[] = [];
+
+  let silenceStart = -1;
+  let inSilence = false;
+
+  for (let i = 0; i < channelData.length; i += windowSize) {
+    // Compute RMS for this window
+    let sum = 0;
+    const end = Math.min(i + windowSize, channelData.length);
+    for (let j = i; j < end; j++) {
+      sum += channelData[j] * channelData[j];
+    }
+    const rms = Math.sqrt(sum / (end - i));
+
+    const time = i / sampleRate;
+
+    if (rms < thresholdLinear) {
+      if (!inSilence) {
+        silenceStart = time;
+        inSilence = true;
+      }
+    } else {
+      if (inSilence) {
+        const duration = time - silenceStart;
+        if (duration >= minSilenceDuration) {
+          // Determine if it's a breath or silence
+          // Breaths are short (0.1-breathMaxDuration) and often have a small spike
+          const isBreath = duration >= 0.1 && duration <= breathMaxDuration;
+          segments.push({
+            start: silenceStart,
+            end: time,
+            duration,
+            type: isBreath ? "breath" : "silence",
+            selected: true,
+          });
+        }
+        inSilence = false;
+      }
+    }
+  }
+
+  // Trailing silence
+  if (inSilence) {
+    const duration = audioBuffer.duration - silenceStart;
+    if (duration >= minSilenceDuration) {
+      segments.push({
+        start: silenceStart,
+        end: audioBuffer.duration,
+        duration,
+        type: "silence",
+        selected: true,
+      });
+    }
+  }
+
+  return segments;
+}
+
+function AudioCleanupTab({
+  audioUrl,
+  videoFile,
+  sensitivity,
+  setSensitivity,
+  detectedSegments,
+  setDetectedSegments,
+  isDetecting,
+  setIsDetecting,
+  detectionDone,
+  setDetectionDone,
+  noiseRemoval,
+  setNoiseRemoval,
+  onRemoveSelected,
+}: {
+  audioUrl: string;
+  videoFile?: File;
+  sensitivity: SilenceSensitivity;
+  setSensitivity: (v: SilenceSensitivity) => void;
+  detectedSegments: SilenceSegment[];
+  setDetectedSegments: (v: SilenceSegment[]) => void;
+  isDetecting: boolean;
+  setIsDetecting: (v: boolean) => void;
+  detectionDone: boolean;
+  setDetectionDone: (v: boolean) => void;
+  noiseRemoval: NoiseRemovalSettings;
+  setNoiseRemoval: (v: NoiseRemovalSettings) => void;
+  onRemoveSelected: (segments: SilenceSegment[]) => void;
+}) {
+  const [showManualSliders, setShowManualSliders] = useState(false);
+  const [beforeAfterMode, setBeforeAfterMode] = useState<"before" | "after">("after");
+  const [detectError, setDetectError] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState(0);
+
+  const silenceCount = useMemo(() => detectedSegments.filter(s => s.type === "silence").length, [detectedSegments]);
+  const breathCount = useMemo(() => detectedSegments.filter(s => s.type === "breath").length, [detectedSegments]);
+  const selectedSegments = useMemo(() => detectedSegments.filter(s => s.selected), [detectedSegments]);
+  const totalSelectedDuration = useMemo(() => selectedSegments.reduce((sum, s) => sum + s.duration, 0), [selectedSegments]);
+
+  // Apply noise removal preset
+  const applyNoisePreset = useCallback((preset: NoiseRemovalPreset) => {
+    const p = NOISE_PRESETS[preset];
+    setNoiseRemoval({
+      ...noiseRemoval,
+      preset,
+      highpassFreq: p.highpass,
+      lowpassFreq: p.lowpass,
+      gateThreshold: p.gate,
+      voiceBoost: p.voiceBoost,
+    });
+  }, [noiseRemoval, setNoiseRemoval]);
+
+  // Detect silences
+  const handleDetect = useCallback(async () => {
+    setIsDetecting(true);
+    setDetectError(null);
+    setDetectedSegments([]);
+    setDetectionDone(false);
+
+    const preset = SENSITIVITY_PRESETS[sensitivity];
+
+    try {
+      const audioCtx = new AudioContext();
+      let audioBuffer: AudioBuffer;
+
+      // Try direct decode first
+      try {
+        let arrayBuf: ArrayBuffer;
+        if (videoFile) {
+          arrayBuf = await videoFile.arrayBuffer();
+        } else if (audioUrl) {
+          const resp = await fetch(audioUrl);
+          arrayBuf = await resp.arrayBuffer();
+        } else {
+          throw new Error("No audio source");
+        }
+        audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+      } catch {
+        // Safari fallback: use FFmpeg to extract audio first
+        if (videoFile) {
+          const { extractAudioForWhisper } = await import("@/lib/extract-audio-ffmpeg");
+          const mp3File = await extractAudioForWhisper(videoFile);
+          if (mp3File) {
+            const mp3Buf = await mp3File.arrayBuffer();
+            audioBuffer = await audioCtx.decodeAudioData(mp3Buf);
+          } else {
+            // File was small enough, try original
+            const buf = await videoFile.arrayBuffer();
+            audioBuffer = await audioCtx.decodeAudioData(buf);
+          }
+        } else {
+          throw new Error("Cannot decode audio. Try using a different browser.");
+        }
+      }
+
+      setVideoDuration(audioBuffer.duration);
+
+      const segments = await analyzeAudioForSilences(
+        audioBuffer,
+        preset.threshold,
+        preset.minDuration,
+        preset.breathMax,
+      );
+
+      setDetectedSegments(segments);
+      setDetectionDone(true);
+      audioCtx.close();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDetectError(msg);
+      console.error("[silence-detect]", err);
+    } finally {
+      setIsDetecting(false);
+    }
+  }, [audioUrl, videoFile, sensitivity, setIsDetecting, setDetectedSegments, setDetectionDone]);
+
+  // Toggle segment selection
+  const toggleSegment = useCallback((index: number) => {
+    setDetectedSegments(
+      detectedSegments.map((s, i) => i === index ? { ...s, selected: !s.selected } : s)
+    );
+  }, [detectedSegments, setDetectedSegments]);
+
+  const selectAll = useCallback(() => {
+    setDetectedSegments(detectedSegments.map(s => ({ ...s, selected: true })));
+  }, [detectedSegments, setDetectedSegments]);
+
+  const deselectAll = useCallback(() => {
+    setDetectedSegments(detectedSegments.map(s => ({ ...s, selected: false })));
+  }, [detectedSegments, setDetectedSegments]);
+
+  return (
+    <div className="space-y-5">
+      {/* ═══ NOISE REMOVAL SECTION ═══ */}
+      <div
+        className="rounded-xl p-4 border"
+        style={{
+          background: "rgba(139,92,246,0.04)",
+          borderColor: noiseRemoval.enabled ? "rgba(139,92,246,0.3)" : "rgba(255,255,255,0.06)",
+        }}
+      >
+        {/* Header with toggle */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm">🎙️</span>
+            <span className="text-sm font-semibold text-white">AI Noise Removal</span>
+          </div>
+          <button
+            onClick={() => setNoiseRemoval({ ...noiseRemoval, enabled: !noiseRemoval.enabled })}
+            className="relative w-11 h-6 rounded-full transition-all duration-300"
+            style={{
+              background: noiseRemoval.enabled
+                ? "linear-gradient(135deg, #8B5CF6, #7C3AED)"
+                : "rgba(255,255,255,0.1)",
+              boxShadow: noiseRemoval.enabled ? "0 0 12px rgba(139,92,246,0.4)" : "none",
+            }}
+          >
+            <div
+              className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all duration-300"
+              style={{ left: noiseRemoval.enabled ? 22 : 2 }}
+            />
+          </button>
+        </div>
+
+        {noiseRemoval.enabled && (
+          <>
+            {/* Presets */}
+            <div className="mb-3">
+              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">
+                Preset
+              </div>
+              <div className="grid grid-cols-4 gap-1.5">
+                {(Object.keys(NOISE_PRESETS) as NoiseRemovalPreset[]).map((key) => {
+                  const p = NOISE_PRESETS[key];
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => applyNoisePreset(key)}
+                      className={`
+                        py-2 px-2 rounded-lg text-center transition-all duration-200 border
+                        ${noiseRemoval.preset === key
+                          ? "bg-violet-500/20 border-violet-500/40 text-violet-200"
+                          : "bg-white/[0.03] border-white/[0.06] text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.06]"
+                        }
+                      `}
+                    >
+                      <div className="text-[11px] font-semibold">{p.label}</div>
+                      <div className="text-[9px] text-zinc-600 mt-0.5">{p.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Manual sliders toggle */}
+            <button
+              onClick={() => setShowManualSliders(!showManualSliders)}
+              className="text-[10px] text-violet-400 hover:text-violet-300 transition-colors mb-2 flex items-center gap-1"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: showManualSliders ? "rotate(90deg)" : "none", transition: "transform 0.2s" }}>
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+              {showManualSliders ? "Hide Manual Controls" : "Show Manual Controls"}
+            </button>
+
+            {showManualSliders && (
+              <div className="space-y-3 mt-2">
+                {/* High-pass */}
+                <div className="rounded-lg p-3 border" style={{ background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)" }}>
+                  <div className="flex justify-between mb-1.5">
+                    <span className="text-[11px] text-zinc-400">High-pass Cutoff</span>
+                    <span className="text-[11px] text-violet-400 font-mono">{noiseRemoval.highpassFreq} Hz</span>
+                  </div>
+                  <input type="range" min={20} max={200} step={5} value={noiseRemoval.highpassFreq}
+                    onChange={(e) => setNoiseRemoval({ ...noiseRemoval, highpassFreq: Number(e.target.value), preset: noiseRemoval.preset })}
+                    className="w-full accent-violet-500 h-1.5"
+                  />
+                  <div className="flex justify-between text-[9px] text-zinc-600 mt-0.5">
+                    <span>20 Hz</span><span>200 Hz</span>
+                  </div>
+                </div>
+                {/* Low-pass */}
+                <div className="rounded-lg p-3 border" style={{ background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)" }}>
+                  <div className="flex justify-between mb-1.5">
+                    <span className="text-[11px] text-zinc-400">Low-pass Cutoff</span>
+                    <span className="text-[11px] text-violet-400 font-mono">{noiseRemoval.lowpassFreq} Hz</span>
+                  </div>
+                  <input type="range" min={8000} max={20000} step={500} value={noiseRemoval.lowpassFreq}
+                    onChange={(e) => setNoiseRemoval({ ...noiseRemoval, lowpassFreq: Number(e.target.value) })}
+                    className="w-full accent-violet-500 h-1.5"
+                  />
+                  <div className="flex justify-between text-[9px] text-zinc-600 mt-0.5">
+                    <span>8 kHz</span><span>20 kHz</span>
+                  </div>
+                </div>
+                {/* Noise gate threshold */}
+                <div className="rounded-lg p-3 border" style={{ background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)" }}>
+                  <div className="flex justify-between mb-1.5">
+                    <span className="text-[11px] text-zinc-400">Noise Gate Threshold</span>
+                    <span className="text-[11px] text-violet-400 font-mono">{noiseRemoval.gateThreshold} dB</span>
+                  </div>
+                  <input type="range" min={-60} max={-20} step={1} value={noiseRemoval.gateThreshold}
+                    onChange={(e) => setNoiseRemoval({ ...noiseRemoval, gateThreshold: Number(e.target.value) })}
+                    className="w-full accent-violet-500 h-1.5"
+                  />
+                  <div className="flex justify-between text-[9px] text-zinc-600 mt-0.5">
+                    <span>-60 dB (quiet)</span><span>-20 dB (loud)</span>
+                  </div>
+                </div>
+                {/* Voice boost */}
+                <div className="rounded-lg p-3 border" style={{ background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)" }}>
+                  <div className="flex justify-between mb-1.5">
+                    <span className="text-[11px] text-zinc-400">Voice Boost</span>
+                    <span className="text-[11px] text-violet-400 font-mono">+{noiseRemoval.voiceBoost} dB</span>
+                  </div>
+                  <input type="range" min={0} max={6} step={0.5} value={noiseRemoval.voiceBoost}
+                    onChange={(e) => setNoiseRemoval({ ...noiseRemoval, voiceBoost: Number(e.target.value) })}
+                    className="w-full accent-violet-500 h-1.5"
+                  />
+                  <div className="flex justify-between text-[9px] text-zinc-600 mt-0.5">
+                    <span>0 dB</span><span>+6 dB</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Before/After toggle */}
+            <div className="flex items-center gap-2 mt-3">
+              <button
+                onClick={() => setBeforeAfterMode(beforeAfterMode === "before" ? "after" : "before")}
+                className={`
+                  px-3 py-1.5 rounded-lg text-[11px] font-medium border transition-all
+                  ${beforeAfterMode === "before"
+                    ? "bg-amber-500/15 border-amber-500/30 text-amber-300"
+                    : "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                  }
+                `}
+              >
+                {beforeAfterMode === "before" ? "🔊 Original" : "🎙️ Processed"}
+              </button>
+              <span className="text-[10px] text-zinc-600">Click to toggle before/after</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ═══ SILENCE / BREATH DETECTION SECTION ═══ */}
+      <div
+        className="rounded-xl p-4 border"
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          borderColor: "rgba(255,255,255,0.06)",
+        }}
+      >
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-sm">🔇</span>
+          <span className="text-sm font-semibold text-white">Silence & Breath Detection</span>
+        </div>
+
+        {/* Sensitivity selector */}
+        <div className="mb-4">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">
+            Sensitivity
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {(Object.keys(SENSITIVITY_PRESETS) as SilenceSensitivity[]).map((key) => {
+              const p = SENSITIVITY_PRESETS[key];
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSensitivity(key)}
+                  className={`
+                    py-2.5 px-3 rounded-lg text-center transition-all duration-200 border
+                    ${sensitivity === key
+                      ? "bg-violet-500/20 border-violet-500/40 text-violet-200"
+                      : "bg-white/[0.03] border-white/[0.06] text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.06]"
+                    }
+                  `}
+                >
+                  <div className="text-xs font-semibold">{p.label}</div>
+                  <div className="text-[9px] text-zinc-600 mt-0.5">
+                    {p.threshold}dB, {p.minDuration}s min
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Detect button */}
+        <button
+          onClick={handleDetect}
+          disabled={isDetecting || (!audioUrl && !videoFile)}
+          className="w-full py-3 rounded-lg text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:hover:scale-100 flex items-center justify-center gap-2"
+          style={{
+            background: isDetecting
+              ? "rgba(139,92,246,0.3)"
+              : "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)",
+            boxShadow: !isDetecting ? "0 2px 12px rgba(139,92,246,0.3)" : "none",
+          }}
+        >
+          {isDetecting ? (
+            <>
+              <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              Analyzing audio...
+            </>
+          ) : (
+            <>🔍 Detect Silences & Breaths</>
+          )}
+        </button>
+
+        {/* Error */}
+        {detectError && (
+          <div className="mt-3 p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 text-xs">
+            ⚠️ {detectError}
+          </div>
+        )}
+
+        {/* Results */}
+        {detectionDone && (
+          <div className="mt-4 space-y-3">
+            {/* Summary */}
+            <div
+              className="flex items-center justify-between rounded-lg p-3 border"
+              style={{
+                background: "linear-gradient(135deg, rgba(139,92,246,0.06) 0%, rgba(34,197,94,0.04) 100%)",
+                borderColor: "rgba(139,92,246,0.15)",
+              }}
+            >
+              <div>
+                <div className="text-sm text-white font-medium">
+                  Found: {silenceCount} silences, {breathCount} breaths
+                </div>
+                {videoDuration > 0 && selectedSegments.length > 0 && (
+                  <div className="text-[11px] text-zinc-400 mt-0.5">
+                    Remove: -{totalSelectedDuration.toFixed(1)}s (Video: {formatDuration(videoDuration)} → {formatDuration(videoDuration - totalSelectedDuration)}{" "}
+                    <span className="text-emerald-400">
+                      -{Math.round((totalSelectedDuration / videoDuration) * 100)}%
+                    </span>
+                    )
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Select All / Deselect All */}
+            <div className="flex gap-2">
+              <button
+                onClick={selectAll}
+                className="flex-1 py-2 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] transition-all"
+              >
+                ☑ Select All
+              </button>
+              <button
+                onClick={deselectAll}
+                className="flex-1 py-2 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] transition-all"
+              >
+                ☐ Deselect All
+              </button>
+            </div>
+
+            {/* Segment list */}
+            <div className="max-h-[240px] overflow-y-auto space-y-1 pr-1">
+              {detectedSegments.map((seg, i) => (
+                <button
+                  key={i}
+                  onClick={() => toggleSegment(i)}
+                  className={`
+                    w-full flex items-center gap-2 p-2 rounded-lg text-left transition-all duration-150 border
+                    ${seg.selected
+                      ? "bg-violet-500/10 border-violet-500/25"
+                      : "bg-white/[0.01] border-white/[0.04] opacity-50"
+                    }
+                  `}
+                >
+                  {/* Checkbox */}
+                  <div
+                    className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border transition-all"
+                    style={{
+                      background: seg.selected ? "rgba(139,92,246,0.3)" : "transparent",
+                      borderColor: seg.selected ? "rgba(139,92,246,0.5)" : "rgba(255,255,255,0.15)",
+                    }}
+                  >
+                    {seg.selected && (
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#A78BFA" strokeWidth="3">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </div>
+                  {/* Timestamp */}
+                  <span className="text-[11px] font-mono text-zinc-400 min-w-[100px]">
+                    {formatDuration(seg.start)}-{formatDuration(seg.end)}
+                  </span>
+                  {/* Type badge */}
+                  <span
+                    className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+                      seg.type === "breath"
+                        ? "bg-amber-500/15 text-amber-400"
+                        : "bg-zinc-500/15 text-zinc-400"
+                    }`}
+                  >
+                    {seg.type === "breath" ? "🌬️ breath" : "🔇 silence"}
+                  </span>
+                  {/* Duration */}
+                  <span className="text-[10px] text-zinc-600 ml-auto">{seg.duration.toFixed(1)}s</span>
+                </button>
+              ))}
+            </div>
+
+            {detectedSegments.length === 0 && (
+              <div className="text-center py-4 text-zinc-500 text-xs">
+                No silences or breaths detected with current sensitivity.
+                <br />Try a more aggressive setting.
+              </div>
+            )}
+
+            {/* Remove Selected button */}
+            {selectedSegments.length > 0 && (
+              <button
+                onClick={() => onRemoveSelected(selectedSegments)}
+                className="w-full py-3 rounded-lg text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2"
+                style={{
+                  background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
+                  boxShadow: "0 2px 12px rgba(34,197,94,0.3)",
+                }}
+              >
+                ✂️ Remove {selectedSegments.length} Selected ({totalSelectedDuration.toFixed(1)}s)
+              </button>
+            )}
           </div>
         )}
       </div>
