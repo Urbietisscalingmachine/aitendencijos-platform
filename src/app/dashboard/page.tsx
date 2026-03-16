@@ -24,7 +24,7 @@ import TimelineTrack, { TRACK_CONFIG } from "@/components/TimelineTrack";
 import ExportModalComponent from "@/components/ExportModal";
 
 // ── Utilities ───────────────────────────────────────────
-import { extractAudioFromVideo } from "@/lib/audio-extract";
+import { extractAudioForWhisper } from "@/lib/extract-audio-ffmpeg";
 
 // ── Types ───────────────────────────────────────────────
 import type {
@@ -1214,60 +1214,43 @@ export default function CineflowDashboard() {
           const { k: apiKey } = await keyRes.json();
           if (!apiKey) throw new Error("API raktas nerastas");
 
-          // Prepare file — compress if too large for Whisper (25MB limit)
+          // Prepare file — use FFmpeg WASM to extract audio if >25MB
           let fileForWhisper: File | Blob = uploadedFile.file;
           
           if (fileForWhisper.size > 25 * 1024 * 1024) {
-            console.log(`[transcribe] File is ${(fileForWhisper.size/1048576).toFixed(1)}MB — extracting audio...`);
-            // Update UI
-            currentSteps = currentSteps.map((s) =>
-              s.id === "transcribe" && s.status === "active"
-                ? { ...s, label: "⏳ Sumažinamas audio..." }
-                : s
-            );
-            setProcessingSteps([...currentSteps]);
+            console.log(`[transcribe] File is ${(fileForWhisper.size/1048576).toFixed(1)}MB — extracting audio with FFmpeg...`);
             
             try {
-              const audioBlob = await extractAudioFromVideo(fileForWhisper as File, (pct) => {
-                currentSteps = currentSteps.map((s) =>
-                  s.id === "transcribe" && s.status === "active"
-                    ? { ...s, label: `⏳ Sumažinamas audio... ${Math.round(pct)}%` }
-                    : s
-                );
-                setProcessingSteps([...currentSteps]);
-              });
-              if (audioBlob && audioBlob.size < 25 * 1024 * 1024) {
-                fileForWhisper = new File([audioBlob], "audio.wav", { type: "audio/wav" });
-                console.log(`[transcribe] Audio extracted: ${(fileForWhisper.size/1024).toFixed(0)}KB`);
-              } else if (audioBlob) {
-                console.warn(`[transcribe] Extracted audio still too large: ${(audioBlob.size/1048576).toFixed(1)}MB`);
+              const audioFile = await extractAudioForWhisper(
+                fileForWhisper as File,
+                (msg, pct) => {
+                  currentSteps = currentSteps.map((s) =>
+                    s.id === "transcribe" && s.status === "active"
+                      ? { ...s, label: `⏳ ${msg}` }
+                      : s
+                  );
+                  setProcessingSteps([...currentSteps]);
+                }
+              );
+              
+              if (audioFile) {
+                fileForWhisper = audioFile;
+                console.log(`[transcribe] Audio extracted: ${(audioFile.size/1024).toFixed(0)}KB MP3`);
               } else {
-                console.warn("[transcribe] Audio extraction returned null");
+                throw new Error("FFmpeg audio extraction nepavyko");
               }
             } catch (extractErr) {
-              console.warn("[transcribe] Audio extraction failed:", extractErr);
+              const msg = extractErr instanceof Error ? extractErr.message : String(extractErr);
+              throw new Error(`Nepavyko sumažinti video (${(uploadedFile.file.size/1048576).toFixed(0)}MB): ${msg}`);
             }
             
-            // Update UI back
+            // Restore label
             currentSteps = currentSteps.map((s) =>
               s.id === "transcribe" && s.status === "active"
                 ? { ...s, label: "⏳ Transkribuojama..." }
                 : s
             );
             setProcessingSteps([...currentSteps]);
-          }
-          
-          // Final size check
-          if (fileForWhisper.size > 25 * 1024 * 1024) {
-            throw new Error(`Failas per didelis (${(fileForWhisper.size/1048576).toFixed(0)}MB). Whisper limitas: 25MB. Sumažinkite video ir bandykite dar kartą.`);
-          }
-          
-          // Ensure proper filename
-          const fileName = (fileForWhisper as File).name || "video.mp4";
-          const ext = fileName.split(".").pop()?.toLowerCase();
-          const validExts = ["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "mov"];
-          if (!ext || !validExts.includes(ext)) {
-            fileForWhisper = new File([fileForWhisper], "video.mp4", { type: "video/mp4" });
           }
 
           console.log(`[transcribe] Sending ${(fileForWhisper.size/1048576).toFixed(1)}MB to OpenAI`);
