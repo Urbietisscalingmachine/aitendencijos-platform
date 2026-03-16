@@ -5,9 +5,19 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
 
-  // Note: COOP/COEP headers for FFmpeg WASM SharedArrayBuffer
-  // are applied dynamically in the export component only,
-  // NOT globally — global COEP breaks blob URL video playback.
+  // Allow cross-origin requests from Cineflow editor
+  async headers() {
+    return [
+      {
+        source: "/api/:path*",
+        headers: [
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Access-Control-Allow-Methods", value: "GET, POST, OPTIONS" },
+          { key: "Access-Control-Allow-Headers", value: "Content-Type, Authorization" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
