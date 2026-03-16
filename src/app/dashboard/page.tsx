@@ -1634,20 +1634,61 @@ export default function CineflowDashboard() {
       });
 
       // ═══ SUBTITLE CLIPS FROM REAL TRANSCRIPT ═══
+      // Split into short phrases (2-4 words each) for CapCut-style subtitles
       if (segs.length > 0) {
+        const WORDS_PER_CLIP = 3; // 3 words per subtitle clip
+        
         segs.forEach((seg) => {
-          dispatch({
-            type: "ADD_CLIP",
-            clip: {
-              id: uid("sub"),
-              trackType: "subtitle",
-              trackIndex: 2,
-              startTime: seg.start,
-              duration: seg.end - seg.start,
-              label: seg.text,
-              style: captionStyle || undefined,
-            },
-          });
+          if (seg.words && seg.words.length > 0) {
+            // Use word-level timestamps for precise clips
+            for (let i = 0; i < seg.words.length; i += WORDS_PER_CLIP) {
+              const chunk = seg.words.slice(i, i + WORDS_PER_CLIP);
+              const text = chunk.map((w) => w.word).join(" ").trim();
+              if (!text) continue;
+              
+              const clipStart = chunk[0].start;
+              const clipEnd = chunk[chunk.length - 1].end;
+              const clipDuration = Math.max(0.2, clipEnd - clipStart);
+              
+              dispatch({
+                type: "ADD_CLIP",
+                clip: {
+                  id: uid("sub"),
+                  trackType: "subtitle",
+                  trackIndex: 2,
+                  startTime: clipStart,
+                  duration: clipDuration,
+                  label: text,
+                  style: captionStyle || undefined,
+                },
+              });
+            }
+          } else {
+            // Fallback: split text by words manually
+            const words = seg.text.split(/\s+/).filter(Boolean);
+            const segDuration = seg.end - seg.start;
+            const wordDuration = segDuration / Math.max(1, words.length);
+            
+            for (let i = 0; i < words.length; i += WORDS_PER_CLIP) {
+              const chunk = words.slice(i, i + WORDS_PER_CLIP);
+              const text = chunk.join(" ");
+              const clipStart = seg.start + i * wordDuration;
+              const clipDuration = Math.max(0.2, chunk.length * wordDuration);
+              
+              dispatch({
+                type: "ADD_CLIP",
+                clip: {
+                  id: uid("sub"),
+                  trackType: "subtitle",
+                  trackIndex: 2,
+                  startTime: clipStart,
+                  duration: clipDuration,
+                  label: text,
+                  style: captionStyle || undefined,
+                },
+              });
+            }
+          }
         });
       }
 
@@ -1758,22 +1799,49 @@ export default function CineflowDashboard() {
     (style: CaptionStyle) => {
       setCaptionStyle(style);
       if (currentStep === 3) {
-        // Remove old subtitle clips and recreate
+        // Remove old subtitle clips and recreate with word-level splitting
+        const WORDS_PER_CLIP = 3;
         const oldSubIds = timeline.clips.filter((c) => c.trackType === "subtitle").map((c) => c.id);
         oldSubIds.forEach((id) => dispatch({ type: "REMOVE_CLIP", clipId: id }));
         transcript.forEach((seg) => {
-          dispatch({
-            type: "ADD_CLIP",
-            clip: {
-              id: uid("sub"),
-              trackType: "subtitle",
-              trackIndex: 2,
-              startTime: seg.start,
-              duration: seg.end - seg.start,
-              label: seg.text,
-              style,
-            },
-          });
+          if (seg.words && seg.words.length > 0) {
+            for (let i = 0; i < seg.words.length; i += WORDS_PER_CLIP) {
+              const chunk = seg.words.slice(i, i + WORDS_PER_CLIP);
+              const text = chunk.map((w) => w.word).join(" ").trim();
+              if (!text) continue;
+              dispatch({
+                type: "ADD_CLIP",
+                clip: {
+                  id: uid("sub"),
+                  trackType: "subtitle",
+                  trackIndex: 2,
+                  startTime: chunk[0].start,
+                  duration: Math.max(0.2, chunk[chunk.length - 1].end - chunk[0].start),
+                  label: text,
+                  style,
+                },
+              });
+            }
+          } else {
+            const words = seg.text.split(/\s+/).filter(Boolean);
+            const segDur = seg.end - seg.start;
+            const wordDur = segDur / Math.max(1, words.length);
+            for (let i = 0; i < words.length; i += WORDS_PER_CLIP) {
+              const chunk = words.slice(i, i + WORDS_PER_CLIP);
+              dispatch({
+                type: "ADD_CLIP",
+                clip: {
+                  id: uid("sub"),
+                  trackType: "subtitle",
+                  trackIndex: 2,
+                  startTime: seg.start + i * wordDur,
+                  duration: Math.max(0.2, chunk.length * wordDur),
+                  label: chunk.join(" "),
+                  style,
+                },
+              });
+            }
+          }
         });
       }
     },
