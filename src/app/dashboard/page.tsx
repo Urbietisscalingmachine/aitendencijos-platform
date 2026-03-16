@@ -42,6 +42,9 @@ import type {
   MusicTrack,
   NoiseRemovalSettings,
   SilenceSegment,
+  AspectRatioPreset,
+  AspectRatioOption,
+  CropPosition,
 } from "@/types/cineflow";
 
 // ═════════════════════════════════════════════════════════
@@ -57,6 +60,20 @@ const BASE_PPS = 60;
 const SNAP_THRESHOLD_PX = 6;
 const MAX_HISTORY = 50;
 const FRAME_DURATION = 1 / 30;
+
+// ── Aspect Ratio Presets ─────────────────────────────
+const ASPECT_RATIOS: AspectRatioOption[] = [
+  { id: "auto", label: "Auto", icon: "🎥", ratio: 0 },
+  { id: "9:16", label: "Reels/TikTok", icon: "📱", ratio: 9 / 16 },
+  { id: "16:9", label: "YouTube", icon: "🖥️", ratio: 16 / 9 },
+  { id: "1:1", label: "Instagram", icon: "⬜", ratio: 1 },
+  { id: "4:5", label: "IG Feed", icon: "📷", ratio: 4 / 5 },
+  { id: "4:3", label: "Classic", icon: "📺", ratio: 4 / 3 },
+  { id: "21:9", label: "Cinematic", icon: "🎬", ratio: 21 / 9 },
+];
+
+// ── Speed Presets ────────────────────────────────────
+const SPEED_PRESETS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3];
 
 // ═════════════════════════════════════════════════════════
 // TYPES
@@ -86,6 +103,8 @@ interface UploadedFile {
 // KEYFRAMES CSS (injected once)
 // ═════════════════════════════════════════════════════════
 
+const DRAFT_KEY = "cineflow-draft";
+
 const GLOBAL_STYLES = `
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 20px rgba(139,92,246,0.15); } 50% { box-shadow: 0 0 40px rgba(139,92,246,0.35); } }
@@ -95,6 +114,8 @@ const GLOBAL_STYLES = `
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
+@keyframes saved-fade-in { 0% { opacity: 0; transform: translateY(-4px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes saved-fade-out { 0% { opacity: 1; } 100% { opacity: 0; } }
 `;
 
 // ═════════════════════════════════════════════════════════
@@ -152,6 +173,7 @@ function timelineReducer(
         startTime: splitPoint,
         duration: rightDur,
         sourceStart: (clip.sourceStart ?? 0) + leftDur,
+        trimStart: (clip.trimStart ?? 0) + leftDur,
       };
       return {
         ...state,
@@ -513,6 +535,103 @@ function BrollModelSelector({
 }
 
 // ═════════════════════════════════════════════════════════
+// ASPECT RATIO SELECTOR COMPONENT
+// ═════════════════════════════════════════════════════════
+
+function AspectRatioSelector({
+  value,
+  onChange,
+}: {
+  value: AspectRatioPreset;
+  onChange: (v: AspectRatioPreset) => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {ASPECT_RATIOS.filter((a) => a.id !== "auto").map((ar) => (
+        <button
+          key={ar.id}
+          onClick={() => onChange(ar.id)}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 10,
+            border: `1px solid ${value === ar.id ? ACCENT : BORDER}`,
+            background: value === ar.id ? "rgba(139,92,246,0.12)" : "rgba(255,255,255,0.02)",
+            cursor: "pointer",
+            transition: "all 0.2s",
+            textAlign: "center",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 3,
+            minWidth: 64,
+          }}
+        >
+          <span style={{ fontSize: 18 }}>{ar.icon}</span>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: value === ar.id ? "#fff" : "rgba(255,255,255,0.6)",
+            }}
+          >
+            {ar.id}
+          </span>
+          <span
+            style={{
+              fontSize: 9,
+              color: value === ar.id ? "rgba(139,92,246,0.9)" : "rgba(255,255,255,0.3)",
+              lineHeight: 1.2,
+            }}
+          >
+            {ar.label}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════
+// SPEED CONTROL COMPONENT
+// ═════════════════════════════════════════════════════════
+
+function SpeedControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.5)", marginRight: 4 }}>
+        Speed:
+      </span>
+      {SPEED_PRESETS.map((s) => (
+        <button
+          key={s}
+          onClick={() => onChange(s)}
+          style={{
+            padding: "4px 8px",
+            borderRadius: 6,
+            border: `1px solid ${value === s ? ACCENT : BORDER}`,
+            background: value === s ? "rgba(139,92,246,0.15)" : "rgba(255,255,255,0.02)",
+            color: value === s ? "#fff" : "rgba(255,255,255,0.5)",
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: "pointer",
+            transition: "all 0.15s",
+            minWidth: 36,
+          }}
+        >
+          {s}x
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════
 // PROCESSING VIEW COMPONENT
 // ═════════════════════════════════════════════════════════
 
@@ -708,6 +827,16 @@ export default function CineflowDashboard() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [showExport, setShowExport] = useState(false);
 
+  // ── Aspect Ratio & Crop state ─────────────────────
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioPreset>("auto");
+  const [cropPosition, setCropPosition] = useState<CropPosition>({ x: 0, y: 0, scale: 1 });
+  const [isDraggingCrop, setIsDraggingCrop] = useState(false);
+  const cropDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const [nativeVideoRatio, setNativeVideoRatio] = useState<number>(16 / 9);
+
+  // ── Speed Control state ───────────────────────────
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+
   // ── Transcript ─────────────────────────────────────
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [brollSuggestions, setBrollSuggestions] = useState<BrollSuggestion[]>([]);
@@ -793,6 +922,17 @@ export default function CineflowDashboard() {
   const [activeZoomCSS, setActiveZoomCSS] = useState<string>("");
   const [activeZoomTransition, setActiveZoomTransition] = useState<string>("");
 
+  // ── Mobile Responsive ──────────────────────────────
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileTab, setMobileTab] = useState<RightPanelTab>("subtitles");
+
+  // ── Auto-Save / Draft System ───────────────────────
+  const [showDraftDialog, setShowDraftDialog] = useState(false);
+  const [pendingDraft, setPendingDraft] = useState<Record<string, unknown> | null>(null);
+  const [showSavedIndicator, setShowSavedIndicator] = useState(false);
+  const [lastSavedTime, setLastSavedTime] = useState<number | null>(null);
+  const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ═════════════════════════════════════════════════════
   // INJECT GLOBAL STYLES
   // ═════════════════════════════════════════════════════
@@ -805,6 +945,109 @@ export default function CineflowDashboard() {
       style.textContent = GLOBAL_STYLES;
       document.head.appendChild(style);
     }
+  }, []);
+
+  // ═════════════════════════════════════════════════════
+  // MOBILE DETECTION
+  // ═════════════════════════════════════════════════════
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  // ═════════════════════════════════════════════════════
+  // AUTO-SAVE / DRAFT SYSTEM
+  // ═════════════════════════════════════════════════════
+
+  const saveDraft = useCallback(() => {
+    const draft = {
+      projectName,
+      mode: editingMode,
+      captionStyle,
+      timeline: { clips: timeline.clips, duration: timeline.duration },
+      transcript,
+      videoName: uploadedFile?.name,
+      savedAt: Date.now(),
+    };
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      setLastSavedTime(Date.now());
+      setShowSavedIndicator(true);
+      if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
+      savedTimeoutRef.current = setTimeout(() => setShowSavedIndicator(false), 2000);
+    } catch (e) {
+      console.error("[auto-save] Failed:", e);
+    }
+  }, [projectName, editingMode, captionStyle, timeline.clips, timeline.duration, transcript, uploadedFile]);
+
+  // Auto-save every 30s when in editor (step 3)
+  useEffect(() => {
+    if (currentStep !== 3) return;
+    const interval = setInterval(saveDraft, 30000);
+    return () => clearInterval(interval);
+  }, [currentStep, saveDraft]);
+
+  // Ctrl+S / Cmd+S manual save
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
+        e.preventDefault();
+        if (currentStep === 3) saveDraft();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [currentStep, saveDraft]);
+
+  // Check for draft on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const draft = JSON.parse(raw);
+        const age = Date.now() - draft.savedAt;
+        if (age < 24 * 60 * 60 * 1000) {
+          setPendingDraft(draft);
+          setShowDraftDialog(true);
+        } else {
+          localStorage.removeItem(DRAFT_KEY);
+        }
+      }
+    } catch (e) {
+      console.error("[draft-restore] Failed to parse draft:", e);
+    }
+  }, []);
+
+  // Restore draft function
+  const restoreDraft = useCallback(() => {
+    if (!pendingDraft) return;
+    const d = pendingDraft;
+    if (d.projectName) setProjectName(d.projectName as string);
+    if (d.mode) setEditingMode(d.mode as EditingMode);
+    if (d.captionStyle) setCaptionStyle(d.captionStyle as CaptionStyle);
+    if (d.transcript) setTranscript(d.transcript as TranscriptSegment[]);
+
+    // Restore timeline clips
+    const tl = d.timeline as { clips?: TimelineClip[]; duration?: number } | undefined;
+    if (tl && tl.clips && tl.clips.length > 0) {
+      tl.clips.forEach((clip: TimelineClip) => {
+        dispatch({ type: "ADD_CLIP", clip });
+      });
+    }
+
+    setShowDraftDialog(false);
+    setPendingDraft(null);
+    // Note: can't restore video file (blob URLs don't persist), user will need to re-upload
+    // but we jump to step 1 so they can re-upload and proceed
+  }, [pendingDraft]);
+
+  const dismissDraft = useCallback(() => {
+    localStorage.removeItem(DRAFT_KEY);
+    setShowDraftDialog(false);
+    setPendingDraft(null);
   }, []);
 
   // ═════════════════════════════════════════════════════
@@ -887,12 +1130,32 @@ export default function CineflowDashboard() {
     }
   }, [activeEffectClip]);
 
+  // ── Detect native video ratio ───────────────────────
+  const handleVideoLoadedMetadata = useCallback(() => {
+    const v = editorVideoRef.current;
+    if (v && v.videoWidth && v.videoHeight) {
+      setNativeVideoRatio(v.videoWidth / v.videoHeight);
+    }
+  }, []);
+
   // Sync timeline currentTime from video timeupdate for smoother subtitle tracking
   const handleVideoTimeUpdate = useCallback(() => {
     if (editorVideoRef.current && !timeline.playing) {
       // Only sync if user seeked the video directly (not when timeline drives playback)
     }
   }, [timeline.playing]);
+
+  // ── Compute target aspect ratio number ────────────
+  const targetAspectRatio = useMemo(() => {
+    if (aspectRatio === "auto") return nativeVideoRatio;
+    const preset = ASPECT_RATIOS.find((a) => a.id === aspectRatio);
+    return preset?.ratio || nativeVideoRatio;
+  }, [aspectRatio, nativeVideoRatio]);
+
+  const needsCrop = useMemo(() => {
+    if (aspectRatio === "auto") return false;
+    return Math.abs(targetAspectRatio - nativeVideoRatio) > 0.05;
+  }, [aspectRatio, targetAspectRatio, nativeVideoRatio]);
 
   // ═════════════════════════════════════════════════════
   // PLAYBACK TIMER
@@ -930,6 +1193,13 @@ export default function CineflowDashboard() {
       if (!timeline.playing && !video.paused) video.pause();
     }
   }, [timeline.currentTime, timeline.playing, currentStep]);
+
+  // ── Sync playback speed with video element ────────
+  useEffect(() => {
+    if (editorVideoRef.current) {
+      editorVideoRef.current.playbackRate = playbackSpeed;
+    }
+  }, [playbackSpeed]);
 
   // ── Noise Removal Audio Chain ─────────────────────
   useEffect(() => {
@@ -1093,6 +1363,30 @@ export default function CineflowDashboard() {
   );
 
   // ═════════════════════════════════════════════════════
+  // SPLIT HANDLER
+  // ═════════════════════════════════════════════════════
+
+  const handleSplit = useCallback(() => {
+    // If clips selected, split them
+    if (selectedClipIds.size > 0) {
+      selectedClipIds.forEach((id) => {
+        dispatch({ type: "SPLIT_CLIP", clipId: id, splitAt: timeline.currentTime });
+      });
+      return;
+    }
+    // Otherwise find active video clip at playhead
+    const activeClip = timeline.clips.find(
+      (c) =>
+        c.trackType === "video" &&
+        timeline.currentTime >= c.startTime &&
+        timeline.currentTime < c.startTime + c.duration
+    );
+    if (activeClip) {
+      dispatch({ type: "SPLIT_CLIP", clipId: activeClip.id, splitAt: timeline.currentTime });
+    }
+  }, [selectedClipIds, timeline.clips, timeline.currentTime]);
+
+  // ═════════════════════════════════════════════════════
   // KEYBOARD SHORTCUTS (editor only)
   // ═════════════════════════════════════════════════════
 
@@ -1135,16 +1429,33 @@ export default function CineflowDashboard() {
         }
         case e.code === "KeyS" && !e.ctrlKey && !e.metaKey: {
           e.preventDefault();
-          selectedClipIds.forEach((id) => {
-            dispatch({ type: "SPLIT_CLIP", clipId: id, splitAt: timeline.currentTime });
-          });
+          handleSplit();
+          break;
+        }
+        // J/K/L — professional playback controls
+        case e.code === "KeyJ": {
+          e.preventDefault();
+          setPlaybackSpeed((prev) => Math.max(0.25, prev - 0.25));
+          if (!timeline.playing) dispatch({ type: "SET_PLAYING", playing: true });
+          break;
+        }
+        case e.code === "KeyK": {
+          e.preventDefault();
+          dispatch({ type: "SET_PLAYING", playing: false });
+          setPlaybackSpeed(1);
+          break;
+        }
+        case e.code === "KeyL": {
+          e.preventDefault();
+          setPlaybackSpeed((prev) => Math.min(3, prev + 0.25));
+          if (!timeline.playing) dispatch({ type: "SET_PLAYING", playing: true });
           break;
         }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [currentStep, timeline.playing, timeline.currentTime, selectedClipIds]);
+  }, [currentStep, timeline.playing, timeline.currentTime, selectedClipIds, handleSplit]);
 
   // ── Zoom with scroll ──
   useEffect(() => {
@@ -1209,6 +1520,69 @@ export default function CineflowDashboard() {
     },
     [timelineHeight]
   );
+
+
+  // ═════════════════════════════════════════════════════
+  // CROP/ZOOM DRAG HANDLERS
+  // ═════════════════════════════════════════════════════
+
+  const handleCropMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!needsCrop) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDraggingCrop(true);
+      cropDragRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        origX: cropPosition.x,
+        origY: cropPosition.y,
+      };
+      const onMove = (ev: MouseEvent) => {
+        if (!cropDragRef.current) return;
+        const dx = (ev.clientX - cropDragRef.current.startX) / cropPosition.scale;
+        const dy = (ev.clientY - cropDragRef.current.startY) / cropPosition.scale;
+        setCropPosition((prev) => ({
+          ...prev,
+          x: cropDragRef.current!.origX + dx,
+          y: cropDragRef.current!.origY + dy,
+        }));
+      };
+      const onUp = () => {
+        setIsDraggingCrop(false);
+        cropDragRef.current = null;
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [needsCrop, cropPosition.x, cropPosition.y, cropPosition.scale]
+  );
+
+  const cropContainerRef = useRef<HTMLDivElement>(null);
+
+  // Use native event listener for crop wheel to allow preventDefault (passive: false)
+  useEffect(() => {
+    const el = cropContainerRef.current;
+    if (!el || !needsCrop) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = -e.deltaY * 0.002;
+      setCropPosition((prev) => ({
+        ...prev,
+        scale: Math.max(1, Math.min(3, prev.scale + delta)),
+      }));
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [needsCrop]);
+
+  // Reset crop when aspect ratio changes
+  useEffect(() => {
+    setCropPosition({ x: 0, y: 0, scale: 1 });
+  }, [aspectRatio]);
 
   // ═════════════════════════════════════════════════════
   // STEP 1: FILE UPLOAD HANDLER
@@ -2143,11 +2517,11 @@ export default function CineflowDashboard() {
   const renderHeader = () => (
     <header
       style={{
-        height: 56,
+        height: isMobile ? 48 : 56,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "0 24px",
+        padding: isMobile ? "0 12px" : "0 24px",
         borderBottom: `1px solid ${BORDER}`,
         background: "rgba(17,17,19,0.85)",
         backdropFilter: "blur(12px)",
@@ -2155,32 +2529,36 @@ export default function CineflowDashboard() {
         zIndex: 100,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 22, fontWeight: 800, color: ACCENT }}>◉</span>
-        <span style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>Cineflow</span>
+      <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10 }}>
+        <span style={{ fontSize: isMobile ? 18 : 22, fontWeight: 800, color: ACCENT }}>◉</span>
+        {!isMobile && <span style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>Cineflow</span>}
       </div>
 
       {currentStep === 3 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button
-            onClick={() => goToStep(2)}
-            style={{
-              padding: "6px 12px",
-              borderRadius: 8,
-              border: `1px solid ${BORDER}`,
-              background: "rgba(255,255,255,0.03)",
-              color: "rgba(255,255,255,0.6)",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            ← Back
-          </button>
-          <div style={{ width: 1, height: 20, background: "rgba(255,255,255,0.1)" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 8, flex: 1, justifyContent: "center", minWidth: 0 }}>
+          {!isMobile && (
+            <>
+              <button
+                onClick={() => goToStep(2)}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 8,
+                  border: `1px solid ${BORDER}`,
+                  background: "rgba(255,255,255,0.03)",
+                  color: "rgba(255,255,255,0.6)",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                ← Back
+              </button>
+              <div style={{ width: 1, height: 20, background: "rgba(255,255,255,0.1)" }} />
+            </>
+          )}
           {isEditingName ? (
             <input
               autoFocus
@@ -2194,106 +2572,128 @@ export default function CineflowDashboard() {
                 borderRadius: 6,
                 padding: "4px 8px",
                 color: "#fff",
-                fontSize: 13,
+                fontSize: isMobile ? 16 : 13,
                 outline: "none",
                 fontFamily: "inherit",
-                width: 200,
+                width: isMobile ? 140 : 200,
               }}
             />
           ) : (
             <span
               onClick={() => setIsEditingName(true)}
               style={{
-                fontSize: 13,
+                fontSize: isMobile ? 13 : 13,
                 color: "rgba(255,255,255,0.7)",
                 cursor: "text",
                 padding: "4px 8px",
                 borderRadius: 6,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: isMobile ? 120 : 200,
               }}
             >
               {projectName}
             </span>
           )}
+          {/* Save indicator */}
+          {showSavedIndicator && (
+            <span
+              style={{
+                fontSize: 11,
+                color: "#22c55e",
+                fontWeight: 600,
+                animation: "saved-fade-in 0.2s ease",
+                whiteSpace: "nowrap",
+              }}
+            >
+              💾 Saved!
+            </span>
+          )}
         </div>
       )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 8 }}>
         {currentStep === 3 && (
           <>
-            <button
-              onClick={() => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
-              style={{
-                width: 34,
-                height: 34,
-                borderRadius: 10,
-                border: "none",
-                background: timeline.playing
-                  ? "linear-gradient(135deg, #ef4444, #dc2626)"
-                  : `linear-gradient(135deg, ${ACCENT}, #7C3AED)`,
-                color: "#fff",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 14,
-                boxShadow: timeline.playing ? "0 0 16px rgba(239,68,68,0.3)" : "0 0 16px rgba(139,92,246,0.3)",
-              }}
-            >
-              {timeline.playing ? "⏸" : "▶"}
-            </button>
-            <span
-              style={{
-                fontSize: 12,
-                fontFamily: "monospace",
-                color: "rgba(255,255,255,0.7)",
-                minWidth: 90,
-                textAlign: "center",
-              }}
-            >
-              {formatTime(timeline.currentTime)} / <span style={{ color: "rgba(255,255,255,0.35)" }}>{formatTime(timeline.duration)}</span>
-            </span>
-            <button
-              onClick={() => dispatch({ type: "UNDO" })}
-              disabled={hist.past.length === 0}
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 6,
-                border: "none",
-                background: "rgba(255,255,255,0.04)",
-                color: hist.past.length === 0 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.6)",
-                cursor: hist.past.length === 0 ? "default" : "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 12,
-              }}
-            >
-              ↩
-            </button>
-            <button
-              onClick={() => dispatch({ type: "REDO" })}
-              disabled={hist.future.length === 0}
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 6,
-                border: "none",
-                background: "rgba(255,255,255,0.04)",
-                color: hist.future.length === 0 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.6)",
-                cursor: hist.future.length === 0 ? "default" : "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 12,
-              }}
-            >
-              ↪
-            </button>
+            {!isMobile && (
+              <>
+                <button
+                  onClick={() => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    border: "none",
+                    background: timeline.playing
+                      ? "linear-gradient(135deg, #ef4444, #dc2626)"
+                      : `linear-gradient(135deg, ${ACCENT}, #7C3AED)`,
+                    color: "#fff",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 14,
+                    boxShadow: timeline.playing ? "0 0 16px rgba(239,68,68,0.3)" : "0 0 16px rgba(139,92,246,0.3)",
+                  }}
+                >
+                  {timeline.playing ? "⏸" : "▶"}
+                </button>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontFamily: "monospace",
+                    color: "rgba(255,255,255,0.7)",
+                    minWidth: 90,
+                    textAlign: "center",
+                  }}
+                >
+                  {formatTime(timeline.currentTime)} / <span style={{ color: "rgba(255,255,255,0.35)" }}>{formatTime(timeline.duration)}</span>
+                </span>
+                <button
+                  onClick={() => dispatch({ type: "UNDO" })}
+                  disabled={hist.past.length === 0}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 6,
+                    border: "none",
+                    background: "rgba(255,255,255,0.04)",
+                    color: hist.past.length === 0 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.6)",
+                    cursor: hist.past.length === 0 ? "default" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 12,
+                  }}
+                >
+                  ↩
+                </button>
+                <button
+                  onClick={() => dispatch({ type: "REDO" })}
+                  disabled={hist.future.length === 0}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 6,
+                    border: "none",
+                    background: "rgba(255,255,255,0.04)",
+                    color: hist.future.length === 0 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.6)",
+                    cursor: hist.future.length === 0 ? "default" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 12,
+                  }}
+                >
+                  ↪
+                </button>
+              </>
+            )}
             <button
               onClick={() => setShowExport(true)}
               style={{
-                padding: "6px 16px",
+                padding: isMobile ? "6px 10px" : "6px 16px",
                 borderRadius: 8,
                 border: "none",
                 background: `linear-gradient(135deg, ${ACCENT}, #7C3AED)`,
@@ -2305,9 +2705,10 @@ export default function CineflowDashboard() {
                 alignItems: "center",
                 gap: 6,
                 boxShadow: "0 2px 12px rgba(139,92,246,0.3)",
+                minHeight: 44,
               }}
             >
-              🚀 Export
+              🚀 {isMobile ? "" : "Export"}
             </button>
           </>
         )}
@@ -2320,7 +2721,7 @@ export default function CineflowDashboard() {
   // ═════════════════════════════════════════════════════
 
   const renderStep1 = () => (
-    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 24 }}>
       <div style={{ maxWidth: 600, width: "100%" }}>
         {!uploadedFile ? (
           /* Drop zone */
@@ -2530,7 +2931,7 @@ export default function CineflowDashboard() {
           )}
 
           {/* Mode cards */}
-          <div style={{ display: "flex", gap: 16, marginBottom: 32, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: isMobile ? 12 : 16, marginBottom: isMobile ? 20 : 32, flexWrap: "wrap", flexDirection: isMobile ? "column" : "row" }}>
             <ModeCard
               icon="🤖"
               title="AI Full Auto"
@@ -2876,7 +3277,282 @@ export default function CineflowDashboard() {
     { id: "audio", label: "Audio", icon: "🎵" },
   ];
 
-  const renderStep3 = () => (
+  const renderStep3 = () => {
+    // ─── MOBILE LAYOUT ───────────────────────────────
+    if (isMobile) {
+      return (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* ── MOBILE: Video Preview (full width) ── */}
+          <div style={{ position: "relative", width: "100%", flexShrink: 0, background: "#000" }}>
+            <video
+              ref={editorVideoRef}
+              src={uploadedFile?.url || ""}
+              style={{
+                width: "100%",
+                maxHeight: "35vh",
+                objectFit: "contain",
+                display: "block",
+                filter: activeFilterCSS || undefined,
+                transform: activeZoomCSS || undefined,
+                transition: `${activeZoomTransition || "transform 0.3s ease"}, filter 0.5s ease`,
+              }}
+              controls={false}
+              autoPlay={false}
+              preload="metadata"
+              playsInline
+              onTimeUpdate={handleVideoTimeUpdate}
+              onClick={() => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
+            />
+            {/* Filter overlay */}
+            {activeFilterOverlay && (
+              <div style={{ position: "absolute", inset: 0, zIndex: 4, pointerEvents: "none", ...activeFilterOverlay }} />
+            )}
+            {/* Subtitle overlay */}
+            {activeSubtitle && (
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: activeSubtitle.style?.position === "top" ? "auto" : activeSubtitle.style?.position === "center" ? "50%" : 30,
+                  top: activeSubtitle.style?.position === "top" ? 30 : "auto",
+                  left: "50%",
+                  transform: activeSubtitle.style?.position === "center" ? "translate(-50%, 50%)" : "translateX(-50%)",
+                  maxWidth: "90%",
+                  textAlign: "center",
+                  zIndex: 16,
+                }}
+              >
+                <span
+                  style={{
+                    display: "inline-block",
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    background: activeSubtitle.style?.backgroundColor || "transparent",
+                    fontFamily: activeSubtitle.style?.fontFamily || "'Inter', sans-serif",
+                    fontSize: Math.min(activeSubtitle.style?.fontSize || 18, 18),
+                    fontWeight: activeSubtitle.style?.fontWeight || 700,
+                    textShadow: activeSubtitle.style?.textShadow || "0 1px 3px rgba(0,0,0,0.9), 0 2px 8px rgba(0,0,0,0.7)",
+                    textTransform: (activeSubtitle.style?.textTransform as React.CSSProperties["textTransform"]) || "none",
+                    lineHeight: 1.4,
+                    ...activeSubtitle.style?.customCSS,
+                  }}
+                >
+                  {activeSubtitle.words && activeSubtitle.words.length > 0 ? (
+                    activeSubtitle.words.map((word, i) => {
+                      const isActive = timeline.currentTime >= word.start && timeline.currentTime < word.end;
+                      const highlightColor = activeSubtitle.style?.highlightColor;
+                      const baseColor = activeSubtitle.style?.color || "#fff";
+                      return (
+                        <span
+                          key={i}
+                          style={{
+                            opacity: isActive ? 1 : 0.5,
+                            color: isActive ? (highlightColor || baseColor) : baseColor,
+                            transition: "opacity 0.1s, color 0.1s",
+                            display: "inline-block",
+                            marginRight: "0.2em",
+                          }}
+                        >
+                          {word.word}
+                        </span>
+                      );
+                    })
+                  ) : (
+                    <span style={{ color: activeSubtitle.style?.color || "#fff" }}>{activeSubtitle.label}</span>
+                  )}
+                </span>
+              </div>
+            )}
+            {/* B-Roll overlay */}
+            {activeBroll && activeBroll.src && (
+              <video
+                key={activeBroll.id}
+                src={activeBroll.src}
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", zIndex: 5, pointerEvents: "none" }}
+                autoPlay muted playsInline loop
+              />
+            )}
+          </div>
+
+          {/* ── MOBILE: Mini playback bar ── */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 12px",
+              borderBottom: `1px solid ${BORDER}`,
+              background: "rgba(0,0,0,0.4)",
+              flexShrink: 0,
+            }}
+          >
+            <button
+              onClick={() => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 8,
+                border: "none",
+                background: timeline.playing
+                  ? "linear-gradient(135deg, #ef4444, #dc2626)"
+                  : `linear-gradient(135deg, ${ACCENT}, #7C3AED)`,
+                color: "#fff",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 14,
+                flexShrink: 0,
+                minHeight: 44,
+              }}
+            >
+              {timeline.playing ? "⏸" : "▶"}
+            </button>
+            <div
+              style={{
+                flex: 1,
+                height: 6,
+                borderRadius: 3,
+                background: "rgba(255,255,255,0.1)",
+                cursor: "pointer",
+                position: "relative",
+              }}
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const ratio = (e.clientX - rect.left) / rect.width;
+                dispatch({ type: "SET_TIME", time: ratio * timeline.duration });
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  height: "100%",
+                  width: `${(timeline.currentTime / Math.max(timeline.duration, 0.1)) * 100}%`,
+                  borderRadius: 3,
+                  background: ACCENT,
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  left: `${(timeline.currentTime / Math.max(timeline.duration, 0.1)) * 100}%`,
+                  transform: "translate(-50%, -50%)",
+                  width: 14,
+                  height: 14,
+                  borderRadius: "50%",
+                  background: "#fff",
+                  boxShadow: "0 0 4px rgba(0,0,0,0.5)",
+                }}
+              />
+            </div>
+            <span
+              style={{
+                fontSize: 11,
+                fontFamily: "monospace",
+                color: "rgba(255,255,255,0.7)",
+                flexShrink: 0,
+                minWidth: 70,
+                textAlign: "right",
+              }}
+            >
+              {formatTime(timeline.currentTime)} / {formatTime(timeline.duration)}
+            </span>
+          </div>
+
+          {/* ── MOBILE: Tab bar (horizontal scroll, touch-friendly) ── */}
+          <div
+            style={{
+              display: "flex",
+              overflowX: "auto",
+              WebkitOverflowScrolling: "touch",
+              borderBottom: `1px solid ${BORDER}`,
+              flexShrink: 0,
+              background: "rgba(0,0,0,0.3)",
+              scrollbarWidth: "none",
+            }}
+          >
+            {RIGHT_PANEL_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => { setActiveTab(tab.id); setMobileTab(tab.id); }}
+                style={{
+                  flex: "0 0 auto",
+                  width: 80,
+                  padding: "10px 8px",
+                  border: "none",
+                  borderBottom: mobileTab === tab.id ? `3px solid ${ACCENT}` : "3px solid transparent",
+                  background: mobileTab === tab.id ? "rgba(139,92,246,0.08)" : "transparent",
+                  color: mobileTab === tab.id ? "#fff" : "rgba(255,255,255,0.45)",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 2,
+                  minHeight: 44,
+                  justifyContent: "center",
+                }}
+              >
+                <span style={{ fontSize: 18 }}>{tab.icon}</span>
+                <span>{tab.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* ── MOBILE: Active tab content (scrollable panel) ── */}
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              overflowX: "hidden",
+              WebkitOverflowScrolling: "touch",
+              maxHeight: "40vh",
+              background: PANEL,
+            }}
+          >
+            {mobileTab === "subtitles" && (
+              <SubtitlesEngine
+                onStyleSelect={handleStyleSelect}
+                onPositionChange={() => {}}
+                onTranscriptEdit={() => {}}
+                initialStyle={captionStyle || undefined}
+              />
+            )}
+            {mobileTab === "broll" && (
+              <BrollEngine transcript={transcript} suggestions={brollSuggestions} onAddClip={handleBrollAdd} currentTime={timeline.currentTime} />
+            )}
+            {mobileTab === "effects" && (
+              <EffectsEngine
+                selectedClipId={selectedClipIds.size === 1 ? Array.from(selectedClipIds)[0] : undefined}
+                currentTime={timeline.currentTime}
+                totalDuration={timeline.duration}
+                onAddEffect={handleAddEffect}
+                onFilterChange={handleFilterChange}
+                onZoomChange={handleZoomChange}
+                zoomMoments={zoomMoments}
+              />
+            )}
+            {mobileTab === "audio" && (
+              <AudioEngine
+                audioUrl={uploadedFile?.url || ""}
+                videoFile={uploadedFile?.file}
+                transcript={transcript.map((s) => s.text).join(" ")}
+                onSettingsChange={setAudioSettings}
+                onAddTrack={handleAddMusicTrack}
+                onSilenceRemoval={handleCleanupSilenceRemoval}
+                onNoiseRemovalChange={handleNoiseRemovalChange}
+              />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── DESKTOP LAYOUT (original) ───────────────────
+    return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {/* ── TOP AREA: Preview + Right Panel ── */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
@@ -2891,6 +3567,48 @@ export default function CineflowDashboard() {
             position: "relative",
           }}
         >
+          {/* ── Aspect Ratio Selector Bar ── */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginBottom: 6,
+              padding: "4px 6px",
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.02)",
+              flexShrink: 0,
+              overflowX: "auto",
+            }}
+          >
+            <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.4)", whiteSpace: "nowrap", marginRight: 2 }}>Format:</span>
+            {ASPECT_RATIOS.map((ar) => (
+              <button
+                key={ar.id}
+                onClick={() => setAspectRatio(ar.id)}
+                style={{
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  border: `1px solid ${aspectRatio === ar.id ? ACCENT : "transparent"}`,
+                  background: aspectRatio === ar.id ? "rgba(139,92,246,0.15)" : "transparent",
+                  color: aspectRatio === ar.id ? "#fff" : "rgba(255,255,255,0.45)",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                  whiteSpace: "nowrap",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 3,
+                  flexShrink: 0,
+                }}
+              >
+                <span>{ar.icon}</span>
+                {ar.id === "auto" ? "Auto" : ar.id}
+              </button>
+            ))}
+          </div>
+
           <div
             style={{
               flex: 1,
@@ -2903,26 +3621,103 @@ export default function CineflowDashboard() {
               justifyContent: "center",
             }}
           >
-            {/* Real HTML5 video — with active filter & zoom CSS */}
-            <video
-              ref={editorVideoRef}
-              src={uploadedFile?.url || ""}
+            {/* Aspect ratio frame container */}
+            <div
               style={{
+                position: "relative",
                 width: "100%",
                 height: "100%",
-                objectFit: "contain",
-                display: "block",
-                filter: activeFilterCSS || undefined,
-                transform: activeZoomCSS || undefined,
-                transition: `${activeZoomTransition || "transform 0.3s ease"}, filter 0.5s ease`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
               }}
-              controls={false}
-              autoPlay={false}
-              preload="metadata"
-              playsInline
-              onTimeUpdate={handleVideoTimeUpdate}
-              onClick={() => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
-            />
+            >
+              {/* Inner frame with target aspect ratio */}
+              <div
+                style={{
+                  position: "relative",
+                  aspectRatio: aspectRatio === "auto" ? undefined : `${targetAspectRatio}`,
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  width: aspectRatio === "auto" ? "100%" : undefined,
+                  height: aspectRatio === "auto" ? "100%" : undefined,
+                  overflow: "hidden",
+                  borderRadius: 8,
+                  ...(aspectRatio !== "auto" && targetAspectRatio >= 1
+                    ? { width: "100%", height: "auto" }
+                    : aspectRatio !== "auto"
+                      ? { height: "100%", width: "auto" }
+                      : {}),
+                }}
+                ref={cropContainerRef}
+                onMouseDown={needsCrop ? handleCropMouseDown : undefined}
+              >
+                {/* Real HTML5 video — with active filter, zoom, crop CSS */}
+                <video
+                  ref={editorVideoRef}
+                  src={uploadedFile?.url || ""}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: needsCrop ? "cover" : "contain",
+                    display: "block",
+                    filter: activeFilterCSS || undefined,
+                    transform: needsCrop
+                      ? `scale(${cropPosition.scale}) translate(${cropPosition.x}px, ${cropPosition.y}px)${activeZoomCSS ? ` ${activeZoomCSS}` : ""}`
+                      : activeZoomCSS || undefined,
+                    transition: isDraggingCrop
+                      ? "filter 0.5s ease"
+                      : `${activeZoomTransition || "transform 0.3s ease"}, filter 0.5s ease`,
+                    cursor: needsCrop ? (isDraggingCrop ? "grabbing" : "grab") : "pointer",
+                  }}
+                  controls={false}
+                  autoPlay={false}
+                  preload="metadata"
+                  playsInline
+                  onLoadedMetadata={handleVideoLoadedMetadata}
+                  onTimeUpdate={handleVideoTimeUpdate}
+                  onClick={needsCrop ? undefined : () => dispatch({ type: "SET_PLAYING", playing: !timeline.playing })}
+                />
+
+                {/* Crop guide overlay when aspect mismatch */}
+                {needsCrop && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      pointerEvents: "none",
+                      zIndex: 6,
+                    }}
+                  >
+                    {/* Rule of thirds grid */}
+                    <svg width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: 0.15 }}>
+                      <line x1="33.33%" y1="0" x2="33.33%" y2="100%" stroke="#fff" strokeWidth="0.5" />
+                      <line x1="66.66%" y1="0" x2="66.66%" y2="100%" stroke="#fff" strokeWidth="0.5" />
+                      <line x1="0" y1="33.33%" x2="100%" y2="33.33%" stroke="#fff" strokeWidth="0.5" />
+                      <line x1="0" y1="66.66%" x2="100%" y2="66.66%" stroke="#fff" strokeWidth="0.5" />
+                    </svg>
+                    {/* Crop info badge */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 6,
+                        left: 6,
+                        padding: "2px 8px",
+                        borderRadius: 4,
+                        background: "rgba(139,92,246,0.85)",
+                        color: "#fff",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: 0.5,
+                      }}
+                    >
+                      {aspectRatio} · {cropPosition.scale.toFixed(1)}x
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* Filter overlay (for vignette, cinematic bars, light leak, etc.) */}
             {activeFilterOverlay && (
@@ -3181,6 +3976,60 @@ export default function CineflowDashboard() {
               >
                 {formatTime(timeline.currentTime)} / {formatTime(timeline.duration)}
               </span>
+
+              {/* Speed indicator */}
+              {playbackSpeed !== 1 && (
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: ACCENT,
+                    flexShrink: 0,
+                    padding: "2px 6px",
+                    borderRadius: 4,
+                    background: "rgba(139,92,246,0.2)",
+                  }}
+                >
+                  {playbackSpeed}x
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* ── Speed Control Bar (below video preview) ── */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+              padding: "4px 6px",
+              marginTop: 4,
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.02)",
+              flexShrink: 0,
+            }}
+          >
+            <SpeedControl value={playbackSpeed} onChange={setPlaybackSpeed} />
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <button
+                onClick={handleSplit}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  border: `1px solid ${BORDER}`,
+                  background: "rgba(255,255,255,0.03)",
+                  color: "rgba(255,255,255,0.6)",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 3,
+                }}
+              >
+                ✂️ Split
+              </button>
             </div>
           </div>
         </div>
@@ -3568,6 +4417,7 @@ export default function CineflowDashboard() {
             ["S", "Split"],
             ["Del", "Remove"],
             ["⌘Z", "Undo"],
+            ["J/K/L", "Speed"],
           ].map(([key, label]) => (
             <div key={key} style={{ display: "flex", alignItems: "center", gap: 3 }}>
               <kbd
@@ -3588,7 +4438,107 @@ export default function CineflowDashboard() {
         </div>
       </div>
     </div>
-  );
+    );
+  };
+
+  // ═════════════════════════════════════════════════════
+  // DRAFT DIALOG
+  // ═════════════════════════════════════════════════════
+
+  const renderDraftDialog = () => {
+    if (!showDraftDialog || !pendingDraft) return null;
+    const d = pendingDraft;
+    const savedAt = d.savedAt as number;
+    const age = Date.now() - savedAt;
+    const ageText = age < 3600000
+      ? `${Math.round(age / 60000)} min. prieš`
+      : age < 86400000
+        ? `${Math.round(age / 3600000)} val. prieš`
+        : "seniai";
+    const tl = d.timeline as { clips?: unknown[] } | undefined;
+    const clipCount = tl?.clips?.length || 0;
+    const subCount = tl?.clips
+      ? (tl.clips as Array<{ trackType?: string }>).filter((c) => c.trackType === "subtitle").length
+      : 0;
+    const fxCount = tl?.clips
+      ? (tl.clips as Array<{ trackType?: string }>).filter((c) => c.trackType === "effect").length
+      : 0;
+
+    return (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 9999,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "rgba(0,0,0,0.7)",
+          backdropFilter: "blur(8px)",
+        }}
+      >
+        <div
+          style={{
+            background: PANEL,
+            border: `1px solid ${BORDER}`,
+            borderRadius: 20,
+            padding: isMobile ? "24px 20px" : "32px 36px",
+            maxWidth: 420,
+            width: "90%",
+            textAlign: "center",
+            animation: "slide-up 0.3s ease",
+          }}
+        >
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}>
+            Nebaigtas projektas
+          </h3>
+          <p style={{ fontSize: 14, color: "rgba(255,255,255,0.6)", margin: "0 0 4px" }}>
+            &ldquo;{(d.projectName as string) || "Untitled"}&rdquo; — {ageText}
+          </p>
+          <p style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", margin: "0 0 24px" }}>
+            {subCount} subtitle clips, {fxCount} effects, {clipCount} total
+          </p>
+          <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+            <button
+              onClick={restoreDraft}
+              style={{
+                flex: 1,
+                padding: "12px 0",
+                borderRadius: 12,
+                border: "none",
+                background: `linear-gradient(135deg, ${ACCENT}, #7C3AED)`,
+                color: "#fff",
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: "pointer",
+                minHeight: 44,
+              }}
+            >
+              Tęsti redagavimą
+            </button>
+            <button
+              onClick={dismissDraft}
+              style={{
+                flex: 1,
+                padding: "12px 0",
+                borderRadius: 12,
+                border: `1px solid ${BORDER}`,
+                background: "rgba(255,255,255,0.03)",
+                color: "rgba(255,255,255,0.7)",
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: "pointer",
+                minHeight: 44,
+              }}
+            >
+              Naujas
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // ═════════════════════════════════════════════════════
   // MAIN RENDER
@@ -3640,6 +4590,9 @@ export default function CineflowDashboard() {
           }
         />
       )}
+
+      {/* Draft Dialog */}
+      {renderDraftDialog()}
     </div>
   );
 }

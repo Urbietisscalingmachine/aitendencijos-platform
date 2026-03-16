@@ -48,12 +48,39 @@ export interface TimelineClip {
   duration: number;
   sourceStart?: number; // trim start in source
   sourceEnd?: number;
+  trimStart?: number; // trim offset from source start (for split clips)
+  trimEnd?: number; // trim offset from source end
+  speed?: number; // playback speed 0.25–3 (default 1)
   src?: string; // url or blob
   label?: string;
   words?: { word: string; start: number; end: number }[]; // word-level timestamps for subtitle clips
   style?: CaptionStyle;
   effectType?: EffectType;
   effectParams?: Record<string, unknown>;
+}
+
+// ─── Aspect Ratio ───────────────────────────────────────
+export type AspectRatioPreset = "auto" | "9:16" | "16:9" | "1:1" | "4:5" | "4:3" | "21:9";
+
+export interface AspectRatioOption {
+  id: AspectRatioPreset;
+  label: string;
+  icon: string;
+  ratio: number; // width / height (0 = auto-detect)
+}
+
+export interface CropPosition {
+  x: number;
+  y: number;
+  scale: number;
+}
+
+// ─── Speed Ramp ─────────────────────────────────────────
+export type SpeedRampPreset = "slow-mo" | "speed-up" | "ramp-up-down" | "custom";
+
+export interface SpeedRampConfig {
+  preset: SpeedRampPreset;
+  keyframes: { time: number; speed: number }[];
 }
 
 export interface TimelineState {
